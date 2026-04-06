@@ -1,0 +1,177 @@
+#!/usr/bin/env node
+
+import pc from 'picocolors';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runAsk, runPlan, runPatch, runReview, runExplore, runHistory, runConfig, runDoctor } from './actions.js';
+import { initializeAriaHome } from './app.js';
+import { parseCLI, validateArgs, GLOBAL_USAGE } from './parser.js';
+import { ConfigError } from './config.js';
+import { ProviderError } from './provider.js';
+import { UserCancelledError } from './agent.js';
+import { ConfirmCancelledError } from './ui.js';
+
+// Re-export for consumers that import from cli.ts
+export type { ParsedArgs } from './parser.js';
+export { parseCLI, validateArgs } from './parser.js';
+
+// ---------------------------------------------------------------------------
+// Error handling
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a thrown error to the appropriate exit code per Requirements 19.1–19.7:
+ *   0  – success (never thrown)
+ *   1  – generic error
+ *   2  – invalid arguments
+ *   3  – configuration error
+ *   4  – provider error
+ *   5  – project detection error
+ *  130 – user cancelled
+ */
+function exitCodeFor(err: unknown): number {
+  if (err instanceof UserCancelledError || err instanceof ConfirmCancelledError) return 130;
+  if (err instanceof ConfigError) return 3;
+  if (err instanceof ProviderError) return 4;
+  if (err instanceof Error) {
+    // Project detection errors surface with a specific message pattern
+    if (err.message.includes('project detection') || err.message.includes('No package.json')) return 5;
+  }
+  return 1;
+}
+
+/**
+ * Central error handler. Writes to stderr and exits with the correct code.
+ * Shows stack trace only when DEBUG env var is set (Requirement 19.8).
+ */
+export function handleError(err: unknown): never {
+  const debug = Boolean(process.env['DEBUG']);
+  const message = err instanceof Error ? err.message : String(err);
+
+  // Requirement 19.9: error messages go to stderr
+  process.stderr.write(pc.red('Error: ') + message + '\n');
+
+  if (debug && err instanceof Error && err.stack) {
+    process.stderr.write('\n' + err.stack + '\n');
+  } else if (!debug) {
+    process.stderr.write(pc.dim('Run with DEBUG=1 for stack trace') + '\n');
+  }
+
+  process.exit(exitCodeFor(err));
+}
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+const VERSION: string = pkg.version;
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse, validate, and route to the appropriate command handler.
+ */
+export function run(): void {
+  const args = parseCLI();
+
+  // Handle --help / --version before validation
+  if (args.command === '--help' || args.command === null) {
+    console.log(GLOBAL_USAGE + `\n${pc.bold('VERSION:')}\n  ${VERSION}\n`);
+    process.exit(0);
+  }
+
+  if (args.command === '--version') {
+    console.log(VERSION);
+    process.exit(0);
+  }
+
+  validateArgs(args);
+
+  // First-run initialization: create ~/.aria dir, history.db, and default config
+  try {
+    initializeAriaHome();
+  } catch {
+    // Non-fatal: continue even if initialization fails
+  }
+
+  switch (args.command) {
+    case 'doctor':
+      runDoctor({
+        format: args.format as 'text' | 'json' | undefined,
+      }).catch(handleError);
+      break;
+
+    case 'ask':
+      runAsk({
+        question: args.question!,
+        session: args.session,
+        maxTokens: args.maxTokens,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'plan':
+      runPlan({
+        goal: args.goal!,
+        session: args.session,
+        output: args.output,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'patch':
+      runPatch({
+        description: args.description!,
+        dryRun: args.dryRun,
+        yes: args.assumeYes,
+        session: args.session,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'review':
+      runReview({
+        unstaged: args.unstaged,
+        branch: args.branch,
+        format: args.format as 'text' | 'json' | undefined,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'config':
+      runConfig({
+        subcommand: args.configSubcommand,
+        key: args.configKey,
+        value: args.configValue,
+        dryRun: args.dryRun,
+        yes: args.assumeYes,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'history':
+      runHistory({
+        limit: args.limit,
+        session: args.session,
+        tree: args.tree,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    case 'explore':
+      runExplore({
+        depth: args.depth,
+        save: args.save,
+        quiet: args.quiet,
+      }).catch(handleError);
+      break;
+
+    default:
+      console.error(pc.red(`Unknown command: "${args.command}"`));
+      console.error(GLOBAL_USAGE);
+      process.exit(2);
+  }
+}
+
+run();

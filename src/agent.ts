@@ -75,8 +75,8 @@ async function executeToolCall(
       };
     }
 
-    // Skip apply_diff in dry-run mode
-    if (ctx.dryRun && toolCall.name === "apply_diff") {
+    // Skip mutation tools in dry-run mode
+    if (ctx.dryRun && (toolCall.name === "apply_diff" || toolCall.name === "apply_schema_change")) {
       return {
         result: {
           success: true,
@@ -86,12 +86,13 @@ async function executeToolCall(
       };
     }
 
-    // Prompt for confirmation before apply_diff (unless --yes)
-    if (!ctx.assumeYes && toolCall.name === "apply_diff") {
+    // Prompt for confirmation before applying changes (unless --yes)
+    if (!ctx.assumeYes && (toolCall.name === "apply_diff" || toolCall.name === "apply_schema_change")) {
       try {
-        const confirmed = await confirm(
-          "Apply the proposed changes to the filesystem?"
-        );
+        const confirmMsg = toolCall.name === "apply_schema_change"
+          ? "Apply the proposed schema changes to the filesystem?"
+          : "Apply the proposed changes to the filesystem?";
+        const confirmed = await confirm(confirmMsg);
         if (!confirmed) {
           throw new UserCancelledError();
         }
@@ -111,9 +112,9 @@ async function executeToolCall(
   if (db) {
     logToolExecution(db, ctx.sessionId, toolCall.name, toolCall.input, result);
 
-    // Log mutation if this was apply_diff and it succeeded
+    // Log mutation if this was apply_diff or apply_schema_change and it succeeded
     if (
-      toolCall.name === "apply_diff" &&
+      (toolCall.name === "apply_diff" || toolCall.name === "apply_schema_change") &&
       result.success &&
       result.data &&
       typeof result.data === "object"
@@ -122,10 +123,11 @@ async function executeToolCall(
         affectedFiles?: string[];
         rollbackHints?: string[];
       };
+      const isSchemaChange = toolCall.name === "apply_schema_change";
       logMutation(db, ctx.sessionId, {
-        action: "apply_diff",
+        action: toolCall.name,
         affectedFiles: data.affectedFiles ?? [],
-        riskLevel: "low",
+        riskLevel: isSchemaChange ? "high" : "low",
         reversible: true,
         rollbackHints: data.rollbackHints,
       });
@@ -166,6 +168,11 @@ export async function agentLoop(
 
   let iterations = 0;
   let lastContent = "";
+
+  // Safety: cap the total number of messages to prevent unbounded memory growth.
+  // Each iteration can add 2-3 messages (assistant + tool results), so
+  // maxIterations * 3 + 2 (system + initial user) is a reasonable upper bound.
+  const maxMessages = ctx.maxIterations * 3 + 10;
 
   while (iterations < ctx.maxIterations) {
     const response = await provider.chat(messages, tools, {
@@ -235,6 +242,17 @@ export async function agentLoop(
 
     if (db) {
       logMessage(db, ctx.sessionId, "user", toolResultMessage);
+    }
+
+    // Trim old messages if we're approaching the cap to prevent unbounded growth.
+    // Keep the system prompt (index 0) and the last N messages.
+    if (messages.length > maxMessages) {
+      const systemMsg = messages[0]?.role === 'system' ? messages[0] : null;
+      const keep = Math.floor(maxMessages * 0.7);
+      const trimmed = messages.slice(-keep);
+      messages.length = 0;
+      if (systemMsg) messages.push(systemMsg);
+      messages.push(...trimmed);
     }
 
     iterations++;

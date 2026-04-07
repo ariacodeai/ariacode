@@ -8,6 +8,7 @@ import { createPatch } from "diff";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import ignore from "ignore";
+import { writeFileAtomic } from "./fs-helpers.js";
 
 /**
  * Max number of proposed diffs stored in memory
@@ -154,6 +155,19 @@ function loadGitignorePatterns(projectRoot: string): ReturnType<typeof ignore> {
 }
 
 /**
+ * Max entries returned by recursive directory listing to prevent OOM on monorepos.
+ */
+const MAX_DIRECTORY_ENTRIES = 10_000;
+
+/**
+ * Shared counter for recursive directory listing.
+ * Passed by reference via a wrapper object so recursive calls share the same limit.
+ */
+interface EntryCounter {
+  count: number;
+}
+
+/**
  * Recursively list directory contents
  */
 function listDirectoryRecursive(
@@ -161,9 +175,10 @@ function listDirectoryRecursive(
   projectRoot: string,
   ig: ReturnType<typeof ignore>,
   currentDepth: number,
-  maxDepth: number
+  maxDepth: number,
+  counter: EntryCounter = { count: 0 },
 ): string[] {
-  if (currentDepth > maxDepth) {
+  if (currentDepth > maxDepth || counter.count >= MAX_DIRECTORY_ENTRIES) {
     return [];
   }
 
@@ -173,6 +188,8 @@ function listDirectoryRecursive(
     const items = fs.readdirSync(dirPath, { withFileTypes: true });
 
     for (const item of items) {
+      if (counter.count >= MAX_DIRECTORY_ENTRIES) break;
+
       const fullPath = nodePath.join(dirPath, item.name);
       const relativePath = nodePath.relative(projectRoot, fullPath);
 
@@ -183,17 +200,20 @@ function listDirectoryRecursive(
 
       if (item.isDirectory()) {
         entries.push(relativePath + "/");
-        // Recurse into subdirectory
+        counter.count++;
+        // Recurse into subdirectory — shares the same counter
         const subEntries = listDirectoryRecursive(
           fullPath,
           projectRoot,
           ig,
           currentDepth + 1,
-          maxDepth
+          maxDepth,
+          counter,
         );
         entries.push(...subEntries);
       } else if (item.isFile()) {
         entries.push(relativePath);
+        counter.count++;
       }
     }
   } catch (error) {
@@ -351,7 +371,7 @@ export const searchCodeTool: Tool = {
         }
 
         // Check if ripgrep is not installed
-        if (error.message.includes("command not found") || error.message.includes("not recognized")) {
+        if (error.code === 'ENOENT' || error.message.includes("command not found") || error.message.includes("not recognized")) {
           return {
             success: false,
             error: "ripgrep (rg) is not installed. Please install it to use code search.",
@@ -733,7 +753,7 @@ export const applyDiffTool: Tool = {
               fs.mkdirSync(dir, { recursive: true });
             }
 
-            fs.writeFileSync(absolutePath, file.newContent, "utf-8");
+            writeFileAtomic(absolutePath, file.newContent);
           }
         }
 
@@ -749,7 +769,7 @@ export const applyDiffTool: Tool = {
           },
         };
       } catch (error) {
-        // Rollback on failure
+        // Best-effort rollback on failure — use writeFileAtomic for consistency
         for (const backup of backups) {
           try {
             if (backup.content === null) {
@@ -759,7 +779,7 @@ export const applyDiffTool: Tool = {
               }
             } else {
               // Restore original content
-              fs.writeFileSync(backup.path, backup.content, "utf-8");
+              writeFileAtomic(backup.path, backup.content);
             }
           } catch (rollbackError) {
             // Log rollback error but continue
@@ -778,6 +798,264 @@ export const applyDiffTool: Tool = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// DB tools (v0.2.0) — all read-only except propose_schema_change
+// ---------------------------------------------------------------------------
+
+import { parsePrismaSchema } from './db/schema.js';
+import { findPrismaClientUsage } from './db/client-usage.js';
+import { buildSchemaChangeProposal, validateSchemaContent } from './db/migrate.js';
+
+/**
+ * read_prisma_schema_parsed tool
+ * Returns structured PrismaSchemaInfo for the project's schema.prisma.
+ */
+export const readPrismaSchemaParserTool: Tool = {
+  name: 'read_prisma_schema_parsed',
+  description: 'Parse schema.prisma and return structured model/field/relation/enum/index data',
+  isMutation: false,
+  inputSchema: z.object({}),
+
+  async execute(_input: unknown, ctx: ExecutionContext, _config: Config): Promise<ToolResult> {
+    try {
+      const info = parsePrismaSchema(ctx.projectRoot);
+      if (!info) {
+        return { success: false, error: 'No schema.prisma found in project' };
+      }
+      return { success: true, data: info };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
+/**
+ * find_prisma_usage tool
+ * Searches for Prisma Client calls in TS/JS files.
+ */
+export const findPrismaUsageTool: Tool = {
+  name: 'find_prisma_usage',
+  description: 'Find Prisma Client calls (e.g. prisma.user.findMany) in project source files',
+  isMutation: false,
+  inputSchema: z.object({
+    model: z.string().optional().describe('Filter by model name (e.g. "user")'),
+    operation: z.string().optional().describe('Filter by operation (e.g. "findMany")'),
+  }),
+
+  async execute(input: unknown, ctx: ExecutionContext, _config: Config): Promise<ToolResult> {
+    try {
+      const { model, operation } = this.inputSchema.parse(input) as { model?: string; operation?: string };
+      let usages = await findPrismaClientUsage(ctx.projectRoot, model);
+      if (operation) {
+        usages = usages.filter((u) => u.operation === operation);
+      }
+      return { success: true, data: { usages } };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
+/**
+ * find_model_references tool
+ * Finds all references to a model name in TS/JS files (not just Prisma Client calls).
+ */
+export const findModelReferencesTool: Tool = {
+  name: 'find_model_references',
+  description: 'Find all references to a Prisma model name in TypeScript/JavaScript files',
+  isMutation: false,
+  inputSchema: z.object({
+    modelName: z.string().describe('The Prisma model name to search for (e.g. "User")'),
+  }),
+
+  async execute(input: unknown, ctx: ExecutionContext, _config: Config): Promise<ToolResult> {
+    try {
+      const { modelName } = this.inputSchema.parse(input) as { modelName: string };
+
+      // Escape regex special characters to prevent injection via modelName
+      const escapedName = modelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      const rgArgs = [
+        '--json',
+        '--max-count=100',
+        '--type=ts',
+        '--type=js',
+        '-e',
+        `\\b${escapedName}\\b`,
+        ctx.projectRoot,
+      ];
+
+      let output: string;
+      try {
+        output = execFileSync('rg', rgArgs, {
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024,
+          cwd: ctx.projectRoot,
+        });
+      } catch (err: any) {
+        if (err.status === 1) return { success: true, data: { references: [] } };
+        if (err.code === 'ENOENT') return { success: true, data: { references: [] } };
+        throw err;
+      }
+
+      const references: Array<{ file: string; line: number; context: string }> = [];
+      for (const line of output.trim().split('\n')) {
+        if (!line) continue;
+        let parsed: any;
+        try { parsed = JSON.parse(line); } catch { continue; }
+        if (parsed.type !== 'match') continue;
+        references.push({
+          file: nodePath.relative(ctx.projectRoot, parsed.data.path.text),
+          line: parsed.data.line_number,
+          context: parsed.data.lines.text.trim(),
+        });
+      }
+
+      return { success: true, data: { references } };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
+/**
+ * In-memory store for proposed schema changes (mirrors proposedDiffs pattern).
+ */
+const proposedSchemaChanges = new Map<string, {
+  schemaPath: string;
+  newContent: string;
+  summary: MutationSummary;
+  createdAt: number;
+}>();
+
+/** Max proposed schema changes in memory */
+const MAX_PROPOSED_SCHEMA_CHANGES = 20;
+/** TTL for proposed schema changes (30 minutes) */
+const PROPOSED_SCHEMA_CHANGE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Evict expired or excess schema change proposals from the cache.
+ */
+function evictStaleSchemaChanges(): void {
+  const now = Date.now();
+  for (const [id, entry] of proposedSchemaChanges) {
+    if (now - entry.createdAt > PROPOSED_SCHEMA_CHANGE_TTL_MS) {
+      proposedSchemaChanges.delete(id);
+    }
+  }
+  if (proposedSchemaChanges.size > MAX_PROPOSED_SCHEMA_CHANGES) {
+    const sorted = [...proposedSchemaChanges.entries()].sort(
+      (a, b) => a[1].createdAt - b[1].createdAt,
+    );
+    const toRemove = sorted.slice(0, sorted.length - MAX_PROPOSED_SCHEMA_CHANGES);
+    for (const [id] of toRemove) {
+      proposedSchemaChanges.delete(id);
+    }
+  }
+}
+
+/**
+ * propose_schema_change tool
+ * Validates new schema content, generates a diff, stores for later apply.
+ * This is a mutation tool — same contract as propose_diff.
+ */
+export const proposeSchemaChangeTool: Tool = {
+  name: 'propose_schema_change',
+  description: 'Propose a change to schema.prisma — validates content, generates diff, stores for confirmation',
+  isMutation: false, // propose only, apply is separate
+  inputSchema: z.object({
+    oldContent: z.string().describe('Current content of schema.prisma'),
+    newContent: z.string().describe('Proposed new content of schema.prisma'),
+    description: z.string().describe('Human-readable description of the change'),
+  }),
+
+  async execute(input: unknown, _ctx: ExecutionContext, _config: Config): Promise<ToolResult> {
+    try {
+      const { oldContent, newContent } = this.inputSchema.parse(input) as {
+        oldContent: string;
+        newContent: string;
+        description: string;
+      };
+
+      // Validate new content parses as valid Prisma schema
+      const validationError = validateSchemaContent(newContent);
+      if (validationError) {
+        return { success: false, error: `Invalid Prisma schema: ${validationError}` };
+      }
+
+      const schemaPath = 'prisma/schema.prisma';
+      const proposal = buildSchemaChangeProposal(schemaPath, oldContent, newContent);
+
+      // Evict stale entries before storing new one
+      evictStaleSchemaChanges();
+
+      // Store for apply_schema_change
+      proposedSchemaChanges.set(proposal.diffId, {
+        schemaPath: proposal.schemaPath,
+        newContent: proposal.newContent,
+        summary: proposal.summary,
+        createdAt: Date.now(),
+      });
+
+      return {
+        success: true,
+        data: {
+          diffId: proposal.diffId,
+          diff: proposal.diff,
+          summary: proposal.summary,
+        },
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
+/**
+ * apply_schema_change tool
+ * Applies a previously proposed schema change to the filesystem.
+ */
+export const applySchemaChangeTool: Tool = {
+  name: 'apply_schema_change',
+  description: 'Apply a previously proposed schema.prisma change to the filesystem',
+  isMutation: true,
+  inputSchema: z.object({
+    diffId: z.string().uuid().describe('ID returned by propose_schema_change'),
+  }),
+
+  async execute(input: unknown, ctx: ExecutionContext, _config: Config): Promise<ToolResult> {
+    try {
+      const { diffId } = this.inputSchema.parse(input) as { diffId: string };
+      const stored = proposedSchemaChanges.get(diffId);
+      if (!stored) {
+        return { success: false, error: `Schema change not found: ${diffId}. Use propose_schema_change first.` };
+      }
+
+      // Validate path is within project root (safety check)
+      validatePath(stored.schemaPath, ctx.projectRoot);
+
+      const absolutePath = nodePath.resolve(ctx.projectRoot, stored.schemaPath);
+      const dir = nodePath.dirname(absolutePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      writeFileAtomic(absolutePath, stored.newContent);
+      proposedSchemaChanges.delete(diffId);
+
+      return {
+        success: true,
+        data: {
+          diffId,
+          affectedFiles: stored.summary.affectedFiles,
+          rollbackHints: stored.summary.rollbackHints,
+        },
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
 /**
  * Tool registry
  * All available tools for the agent
@@ -790,4 +1068,9 @@ export const allTools: Tool[] = [
   readPrismaSchemaTool,
   proposeDiffTool,
   applyDiffTool,
+  readPrismaSchemaParserTool,
+  findPrismaUsageTool,
+  findModelReferencesTool,
+  proposeSchemaChangeTool,
+  applySchemaChangeTool,
 ];

@@ -1,0 +1,119 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum Role {
+  ADMIN
+  USER
+  GUEST
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  role      Role      @default(USER)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  orders    Order[]
+  reviews   Review[]
+  cart      Cart?
+  addresses Address[]
+
+  @@index([email, createdAt])
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  stock       Int         @default(0)
+  categoryId  String
+  category    Category    @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  reviews     Review[]
+  createdAt   DateTime    @default(now())
+
+  @@index([categoryId])
+  @@index([price])
+}
+
+model Category {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  products Product[]
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  status     OrderStatus @default(PENDING)
+  total      Float
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  items      OrderItem[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([userId, status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  quantity  Int
+  price     Float
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int
+  comment   String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([productId])
+}
+
+model Address {
+  id        String  @id @default(cuid())
+  street    String
+  city      String
+  country   String
+  zipCode   String
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}

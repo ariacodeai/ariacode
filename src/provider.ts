@@ -270,6 +270,11 @@ export class AnthropicProvider implements Provider {
 abstract class OpenAICompatibleProvider implements Provider {
   abstract name: string;
 
+  /** Timeout for API requests in milliseconds (default: 2 minutes). */
+  protected getTimeoutMs(): number {
+    return 120_000;
+  }
+
   protected abstract getEndpoint(): string;
   protected abstract getHeaders(): Record<string, string>;
   protected abstract buildBody(
@@ -288,6 +293,7 @@ abstract class OpenAICompatibleProvider implements Provider {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify(this.buildBody(messages, tools, options)),
+        signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
 
       if (!response.ok) {
@@ -410,6 +416,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify(this.buildBody(messages, tools, options)),
+        signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
 
       if (!response.ok) {
@@ -488,60 +495,6 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
     };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Ollama response validation override
-// ---------------------------------------------------------------------------
-
-// Ollama uses a different response shape: { message: { content, tool_calls } }
-// Override the chat method to handle this.
-OllamaProvider.prototype.chat = async function (
-  this: OllamaProvider,
-  messages: ProviderMessage[],
-  tools: Tool[],
-  options: { model: string; maxTokens: number; temperature?: number },
-): Promise<ProviderResponse> {
-  try {
-    const response = await fetch(this.getEndpoint(), {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify(this.buildBody(messages, tools, options)),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        `ollama API error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`,
-      );
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    const message = data?.message as Record<string, unknown> | undefined;
-
-    if (!message) {
-      throw new Error("Unexpected Ollama response format: missing message");
-    }
-
-    const content = typeof message.content === "string" ? message.content : "";
-    const toolCalls = parseOpenAIToolCalls(
-      Array.isArray(message.tool_calls) ? message.tool_calls : undefined,
-    );
-
-    return {
-      content,
-      toolCalls,
-      stopReason: mapFinishReason(undefined, toolCalls.length),
-    };
-  } catch (error) {
-    if (error instanceof ProviderError) throw error;
-    throw new ProviderError(
-      `ollama API error: ${error instanceof Error ? error.message : String(error)}`,
-      "ollama",
-      error,
-    );
-  }
-};
-
 
 // ---------------------------------------------------------------------------
 // Zod → JSON Schema converter

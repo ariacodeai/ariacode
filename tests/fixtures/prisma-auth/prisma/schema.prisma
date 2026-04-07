@@ -1,0 +1,89 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  USER
+  MODERATOR
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  /// Hashed password — never expose in API responses
+  passwordHash  String?
+  role          Role      @default(USER)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  apiKeys       ApiKey[]
+  passwordResets PasswordReset[]
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  /// Session token — treat as secret
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expires      DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([sessionToken])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  /// OAuth access token — treat as secret
+  accessToken       String?
+  /// OAuth refresh token — treat as secret
+  refreshToken      String?
+  expiresAt         Int?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  /// API key hash — never store plaintext
+  keyHash   String    @unique
+  name      String
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastUsed  DateTime?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  /// Reset token — single use, expires
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}

@@ -38,4 +38,5 @@ coverage/
 
 # Temporary files
 *.tmp
+*.tgz
 .cache/

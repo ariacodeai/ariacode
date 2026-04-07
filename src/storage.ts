@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -106,10 +107,18 @@ export function closeDatabase(): void {
   }
 }
 
-// Ensure database is closed on process exit
-process.on("exit", closeDatabase);
-process.on("SIGINT", () => { closeDatabase(); process.exit(130); });
-process.on("SIGTERM", () => { closeDatabase(); process.exit(0); });
+// Ensure database is closed on process exit.
+// Use a flag to prevent double-close from signal handlers calling process.exit
+// which then triggers the 'exit' handler again.
+let _closing = false;
+function safeClose(): void {
+  if (_closing) return;
+  _closing = true;
+  closeDatabase();
+}
+process.on("exit", safeClose);
+process.on("SIGINT", () => { safeClose(); process.exit(130); });
+process.on("SIGTERM", () => { safeClose(); process.exit(0); });
 
 // Schema versioning
 const CURRENT_SCHEMA_VERSION = 1;
@@ -458,6 +467,38 @@ export function logMutation(
 }
 
 // Session cleanup
+
+/**
+ * Resolve an existing session by ID or create a new one.
+ * Used by all action commands to ensure consistent session handling.
+ */
+export function resolveOrCreateSession(
+  db: Database.Database,
+  opts: {
+    sessionId?: string;
+    command: string;
+    projectRoot: string;
+    provider: string;
+    model: string;
+  },
+): string {
+  if (opts.sessionId) {
+    const existing = getSession(db, opts.sessionId);
+    if (!existing) {
+      throw new Error(`Session not found: ${opts.sessionId}`);
+    }
+    return existing.id;
+  }
+  const id = randomUUID();
+  createSession(db, {
+    id,
+    command: opts.command,
+    projectRoot: opts.projectRoot,
+    provider: opts.provider,
+    model: opts.model,
+  });
+  return id;
+}
 
 /**
  * Delete sessions older than retainDays

@@ -5,6 +5,12 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAsk, runPlan, runPatch, runReview, runExplore, runHistory, runConfig, runDoctor } from './actions.js';
+import { runDbSchema } from './actions/db-schema.js';
+import { runDbAsk } from './actions/db-ask.js';
+import { runDbExplain } from './actions/db-explain.js';
+import { runDbMigrate } from './actions/db-migrate.js';
+import { runUpgradeDeps } from './actions/upgrade-deps.js';
+import { runUpgradePrisma } from './actions/upgrade-prisma.js';
 import { initializeAriaHome } from './app.js';
 import { parseCLI, validateArgs, GLOBAL_USAGE } from './parser.js';
 import { ConfigError } from './config.js';
@@ -165,6 +171,84 @@ export function run(): void {
         save: args.save,
         quiet: args.quiet,
       }).catch(handleError);
+      break;
+
+    case 'db':
+      switch (args.dbSubcommand) {
+        case 'schema':
+          runDbSchema({
+            json: args.dbJson,
+            model: args.dbModel,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        case 'ask':
+          if (!args.dbQuestion) {
+            console.error(pc.red('Error: db ask requires a <question> argument'));
+            process.exit(2);
+          }
+          runDbAsk({
+            question: args.dbQuestion,
+            session: args.session,
+            model: args.dbModel,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        case 'explain':
+          if (!args.dbDescription) {
+            console.error(pc.red('Error: db explain requires a <description> argument'));
+            process.exit(2);
+          }
+          runDbExplain({
+            description: args.dbDescription,
+            file: args.dbFile,
+            session: args.session,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        case 'migrate':
+          if (!args.dbDescription) {
+            console.error(pc.red('Error: db migrate requires a <description> argument'));
+            process.exit(2);
+          }
+          runDbMigrate({
+            description: args.dbDescription,
+            dryRun: args.dryRun,
+            yes: args.assumeYes,
+            session: args.session,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        default:
+          console.error(pc.red('Usage: aria db <schema|ask|explain|migrate>'));
+          process.exit(2);
+      }
+      break;
+
+    case 'upgrade':
+      switch (args.upgradeSubcommand) {
+        case 'deps':
+          runUpgradeDeps({
+            dryRun: args.dryRun,
+            yes: args.assumeYes,
+            risk: args.upgradeRisk,
+            dev: args.upgradeDev,
+            session: args.session,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        case 'prisma':
+          runUpgradePrisma({
+            dryRun: args.dryRun,
+            yes: args.assumeYes,
+            session: args.session,
+            quiet: args.quiet,
+          }).catch(handleError);
+          break;
+        default:
+          console.error(pc.red('Usage: aria upgrade <deps|prisma>'));
+          process.exit(2);
+      }
       break;
 
     default:

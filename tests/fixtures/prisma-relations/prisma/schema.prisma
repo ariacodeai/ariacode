@@ -1,0 +1,71 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// Self-referential user with friend relationships
+model User {
+  id          String       @id @default(cuid())
+  name        String
+  email       String       @unique
+  followedBy  User[]       @relation("UserFollows")
+  following   User[]       @relation("UserFollows")
+  posts       Post[]
+  userRoles   UserRole[]
+  taggedIn    PostTag[]
+
+  @@index([email])
+}
+
+model Post {
+  id        String    @id @default(cuid())
+  title     String
+  authorId  String
+  author    User      @relation(fields: [authorId], references: [id])
+  tags      PostTag[]
+
+  @@index([authorId])
+}
+
+/// Explicit many-to-many join table for Post <-> Tag
+model PostTag {
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id])
+  tagId     String
+  tag       Tag      @relation(fields: [tagId], references: [id])
+  userId    String
+  taggedBy  User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@id([postId, tagId])
+  @@index([tagId])
+  @@index([userId])
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String    @unique
+  posts PostTag[]
+}
+
+model Role {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  userRoles UserRole[]
+}
+
+/// Explicit many-to-many join table for User <-> Role
+model UserRole {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id])
+  grantedAt DateTime @default(now())
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}

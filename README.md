@@ -6,12 +6,11 @@
 
 [![Node.js >=20](https://img.shields.io/node/v/@ariacode/cli.svg)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Build](https://img.shields.io/github/actions/workflow/status/ariacodeai/ariacode/ci.yml?branch=main)](https://github.com/ariacodeai/ariacode/actions)
 [![npm](https://img.shields.io/npm/v/@ariacode/cli)](https://www.npmjs.com/package/@ariacode/cli)
 
 A predictable, terminal-native coding agent for Next.js, Nest.js, Prisma and Node.js projects.
 
-Aria reads your repository, generates safe diffs with preview and tracks every mutation in a local SQLite history — no surprises.
+Aria reads your repository, generates safe diffs with preview, understands your Prisma schema, upgrades dependencies with risk analysis, and tracks every mutation in a local SQLite history — no surprises.
 
 ## Requirements
 
@@ -47,6 +46,18 @@ aria review
 
 # Explore an unfamiliar codebase
 aria explore
+
+# Prisma schema inspection (instant, no LLM)
+aria db schema
+
+# Ask about your database schema
+aria db ask "users with more than 5 orders in the last 30 days"
+
+# Upgrade outdated dependencies
+aria upgrade deps
+
+# Upgrade Prisma with migration guidance
+aria upgrade prisma
 
 # Check your environment
 aria doctor
@@ -152,10 +163,167 @@ aria config init                   # Create ./.aria.toml with defaults
 
 ### `aria doctor`
 
-Run environment diagnostics: Node.js version, git, ripgrep, config validity, history DB, provider API keys, and project detection.
+Run environment diagnostics: Node.js version, git, ripgrep, config validity, history DB, provider API keys, project detection, and Prisma schema presence.
 
 ```
 aria doctor [--format text|json]
+```
+
+### `aria db schema`
+
+Parse and render `schema.prisma` content — models, fields, relations, enums, indexes. No LLM call, instant and free.
+
+```
+aria db schema [--json] [--model <name>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output raw `PrismaSchemaInfo` as JSON |
+| `--model <name>` | Filter to a single model |
+
+Example output:
+
+```
+Prisma Schema: prisma/schema.prisma
+Provider: postgresql
+
+Models (3)
+
+  User
+  ┌──────────────┬──────────┬──────────────────┐
+  │ Field        │ Type     │ Modifiers        │
+  ├──────────────┼──────────┼──────────────────┤
+  │ id           │ String   │ @id @default     │
+  │ email        │ String   │ @unique          │
+  │ createdAt    │ DateTime │ @default(now())  │
+  │ orders       │ Order[]  │ relation         │
+  └──────────────┴──────────┴──────────────────┘
+
+Enums (1)
+  Role: ADMIN, USER, GUEST
+```
+
+### `aria db ask <question>`
+
+Q&A over your Prisma schema. Generates runnable Prisma Client code. Warns when queries touch sensitive fields (password, token, secret, apiKey).
+
+```
+aria db ask "<question>" [--session <id>] [--model <prisma-model>]
+```
+
+### `aria db explain <description>`
+
+Analyze Prisma Client usage in your code. Identifies N+1 queries, missing indexes, over-fetching, and cartesian products. Suggests `@@index` additions and query improvements.
+
+```
+aria db explain "<description>" [--file <path>] [--session <id>]
+```
+
+### `aria db migrate <description>`
+
+Propose changes to `schema.prisma` with diff preview and confirmation. Prints manual `prisma migrate` commands — Aria never runs migrations.
+
+```
+aria db migrate "<description>" [--dry-run] [--yes] [--session <id>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview schema diff without writing |
+| `--yes` | Skip confirmation prompt |
+
+After a successful write:
+
+```
+✓ Schema updated: prisma/schema.prisma
+
+To apply this migration, run:
+
+  Development:
+    pnpm prisma migrate dev --name <migration_name>
+
+  Production:
+    pnpm prisma migrate deploy
+
+Aria does not run migrations automatically.
+Review the generated SQL before applying to production.
+```
+
+### `aria upgrade deps`
+
+Analyze outdated dependencies, classify by semver risk, and propose upgrades to `package.json`. Supports npm, pnpm, yarn, and bun.
+
+```
+aria upgrade deps [--dry-run] [--yes] [--risk patch|minor|major|all] [--dev]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview upgrades without modifying `package.json` |
+| `--yes` | Skip confirmation prompt |
+| `--risk <level>` | Filter by risk: `patch`, `minor` (default — includes patch), `major`, `all` |
+| `--dev` | Include devDependencies |
+
+Behavior:
+1. Detects your package manager from lockfile
+2. Runs `{pm} outdated --json` (read-only)
+3. Classifies each upgrade as patch / minor / major / prerelease
+4. For major upgrades, uses LLM to summarize breaking changes
+5. Shows a grouped table preview
+6. On confirmation, updates `package.json` and prints install command
+
+Aria never runs `npm install` / `pnpm install` / `yarn install` / `bun install`. You run it.
+
+```
+✓ Updated package.json with 12 dependency upgrades
+
+To install the new versions, run:
+  pnpm install
+
+Then verify:
+  pnpm test
+  pnpm run build
+```
+
+### `aria upgrade prisma`
+
+Prisma-specific upgrade with version detection and migration guidance for major upgrades.
+
+```
+aria upgrade prisma [--dry-run] [--yes]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview without modifying `package.json` |
+| `--yes` | Skip confirmation prompt |
+
+For major Prisma upgrades, the LLM analyzes your `schema.prisma` for patterns affected by breaking changes and provides project-specific migration steps.
+
+After a successful upgrade:
+
+```
+✓ Updated Prisma versions in package.json:
+    prisma: 5.22.0 → 6.1.0
+    @prisma/client: 5.22.0 → 6.1.0
+
+Next steps (run in order):
+
+1. Install updated dependencies:
+     pnpm install
+
+2. Regenerate Prisma Client:
+     pnpm prisma generate
+
+3. Review breaking changes:
+     https://github.com/prisma/prisma/releases/tag/6.1.0
+
+4. Run your test suite:
+     pnpm test
+
+Aria has updated package.json only.
+Migration commands must be run manually.
 ```
 
 ## Configuration
@@ -368,7 +536,7 @@ See the full model catalogue at [openrouter.ai/models](https://openrouter.ai/mod
 | `2` | Invalid arguments |
 | `3` | Configuration error |
 | `4` | Provider error (e.g. missing API key) |
-| `5` | Project detection error |
+| `5` | Project detection error / Prisma not found |
 | `130` | User cancelled (Ctrl+C or declined confirmation) |
 
 ## Session History
@@ -394,6 +562,9 @@ Sessions older than `retain_days` (default: 90) are cleaned up automatically.
 - `.env` files and `node_modules` are excluded from directory listings by default
 - API keys are never logged to the history database or terminal output
 - All mutations require confirmation unless `--yes` is passed
+- `aria db migrate` never executes `prisma migrate` — prints commands for user to run
+- `aria upgrade deps` never runs `npm/pnpm/yarn/bun install` — modifies `package.json` only
+- `aria upgrade prisma` never runs `prisma migrate` or install commands
 
 ## Contributing
 

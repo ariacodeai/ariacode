@@ -206,4 +206,53 @@ describe("validateArgs", () => {
     const args = parseCLI(["doctor"]);
     expect(() => validateArgs(args)).not.toThrow();
   });
+
+  it("does not throw for upgrade command (no required args)", () => {
+    const args = parseCLI(["upgrade", "deps"]);
+    expect(() => validateArgs(args)).not.toThrow();
+  });
+
+  it("does not throw for upgrade prisma command", () => {
+    const args = parseCLI(["upgrade", "prisma"]);
+    expect(() => validateArgs(args)).not.toThrow();
+  });
+});
+
+describe("parseCLI — upgrade subcommand", () => {
+  it("parses upgrade deps", () => {
+    const args = parseCLI(["upgrade", "deps"]);
+    expect(args.command).toBe("upgrade");
+    expect(args.upgradeSubcommand).toBe("deps");
+  });
+
+  it("parses upgrade prisma", () => {
+    const args = parseCLI(["upgrade", "prisma"]);
+    expect(args.command).toBe("upgrade");
+    expect(args.upgradeSubcommand).toBe("prisma");
+  });
+
+  it("parses --risk flag for upgrade deps", () => {
+    const args = parseCLI(["upgrade", "deps", "--risk", "major"]);
+    expect(args.upgradeRisk).toBe("major");
+  });
+
+  it("parses --risk= syntax", () => {
+    const args = parseCLI(["upgrade", "deps", "--risk=all"]);
+    expect(args.upgradeRisk).toBe("all");
+  });
+
+  it("parses --dev flag for upgrade deps", () => {
+    const args = parseCLI(["upgrade", "deps", "--dev"]);
+    expect(args.upgradeDev).toBe(true);
+  });
+
+  it("parses --dry-run with upgrade deps", () => {
+    const args = parseCLI(["upgrade", "deps", "--dry-run"]);
+    expect(args.dryRun).toBe(true);
+  });
+
+  it("parses --yes with upgrade prisma", () => {
+    const args = parseCLI(["upgrade", "prisma", "--yes"]);
+    expect(args.assumeYes).toBe(true);
+  });
 });

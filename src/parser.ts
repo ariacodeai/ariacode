@@ -34,6 +34,17 @@ export interface ParsedArgs {
   configSubcommand?: "get" | "set" | "path" | "init";
   configKey?: string;
   configValue?: string;
+  // db subcommand (v0.2.0)
+  dbSubcommand?: "schema" | "ask" | "explain" | "migrate";
+  dbQuestion?: string;
+  dbDescription?: string;
+  dbModel?: string;
+  dbFile?: string;
+  dbJson?: boolean;
+  // upgrade subcommand (v0.2.1)
+  upgradeSubcommand?: "deps" | "prisma";
+  upgradeRisk?: "patch" | "minor" | "major" | "all";
+  upgradeDev?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +66,8 @@ ${pc.bold("COMMANDS:")}
   history               View session history
   config                Manage configuration
   doctor                Check environment and project detection
+  db                    Prisma database assistant (schema, ask, explain, migrate)
+  upgrade               Upgrade dependencies and frameworks (deps, prisma)
 
 ${pc.bold("GLOBAL OPTIONS:")}
   --dry-run             Preview changes without applying them
@@ -149,6 +162,41 @@ ${pc.bold("USAGE:")}
 ${pc.bold("OPTIONS:")}
   --format <text|json>  Output format (default: text)
 `,
+  db: `
+${pc.bold("USAGE:")}
+  aria db <subcommand> [options]
+
+${pc.bold("SUBCOMMANDS:")}
+  schema                Parse and render schema.prisma (no LLM)
+  ask <question>        Q&A over Prisma schema, generates Prisma Client code
+  explain <description> Analyze Prisma Client usage and explain performance
+  migrate <description> Propose changes to schema.prisma (never runs migrations)
+
+${pc.bold("OPTIONS:")}
+  --model <name>        Filter to a specific Prisma model
+  --file <path>         Focus on a specific file (db explain)
+  --json                Output as JSON (db schema)
+  --dry-run             Preview without applying (db migrate)
+  --yes                 Skip confirmation (db migrate)
+`,
+  upgrade: `
+${pc.bold("USAGE:")}
+  aria upgrade <subcommand> [options]
+
+${pc.bold("SUBCOMMANDS:")}
+  deps                  Analyze and upgrade outdated dependencies
+  prisma                Prisma-specific upgrade with migration guidance
+
+${pc.bold("OPTIONS (deps):")}
+  --risk <level>        Filter by risk: patch, minor, major, all (default: minor)
+  --dev                 Include devDependencies in upgrade
+  --dry-run             Preview without modifying package.json
+  --yes                 Skip confirmation prompt
+
+${pc.bold("OPTIONS (prisma):")}
+  --dry-run             Preview without modifying package.json
+  --yes                 Skip confirmation prompt
+`,
 };
 
 // ---------------------------------------------------------------------------
@@ -222,6 +270,25 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       args.limit = parseInt(token.slice("--limit=".length), 10);
     } else if (token === "--tree") {
       args.tree = true;
+    } else if (token === "--json") {
+      args.dbJson = true;
+    } else if (token === "--model") {
+      i++;
+      args.dbModel = tokens[i];
+    } else if (token.startsWith("--model=")) {
+      args.dbModel = token.slice("--model=".length);
+    } else if (token === "--file") {
+      i++;
+      args.dbFile = tokens[i];
+    } else if (token.startsWith("--file=")) {
+      args.dbFile = token.slice("--file=".length);
+    } else if (token === "--risk") {
+      i++;
+      args.upgradeRisk = tokens[i] as "patch" | "minor" | "major" | "all";
+    } else if (token.startsWith("--risk=")) {
+      args.upgradeRisk = token.slice("--risk=".length) as "patch" | "minor" | "major" | "all";
+    } else if (token === "--dev") {
+      args.upgradeDev = true;
     } else if (token === "--help" || token === "-h") {
       positionals.unshift("--help");
     } else if (token === "--version" || token === "-v") {
@@ -259,6 +326,25 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
           if (positionals[2]) args.configKey = positionals[2];
           if (positionals[3]) args.configValue = positionals[3];
         }
+      }
+      break;
+    }
+    case "db": {
+      const sub = positionals[1];
+      if (sub === "schema" || sub === "ask" || sub === "explain" || sub === "migrate") {
+        args.dbSubcommand = sub;
+        if (sub === "ask" && positionals[2]) {
+          args.dbQuestion = positionals[2];
+        } else if ((sub === "explain" || sub === "migrate") && positionals[2]) {
+          args.dbDescription = positionals[2];
+        }
+      }
+      break;
+    }
+    case "upgrade": {
+      const sub = positionals[1];
+      if (sub === "deps" || sub === "prisma") {
+        args.upgradeSubcommand = sub;
       }
       break;
     }
@@ -334,6 +420,8 @@ export function validateArgs(args: ParsedArgs): void {
     case "explore":
     case "history":
     case "doctor":
+    case "db":
+    case "upgrade":
     case null:
     case "--help":
     case "--version":

@@ -60,6 +60,7 @@ import { loadConfig, validateConfig, type ConfigSource } from "./config.js";
 import type { Config } from "./config.js";
 import type { ExecutionContext } from "./context.js";
 import type { Tool } from "./tools.js";
+import { getShellRcPath } from "./fs-helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -200,26 +201,29 @@ async function resolveProvider(config: Config): Promise<Provider> {
   const { saveKey } = await prompts({
     type: "confirm",
     name: "saveKey",
-    message: `Save ${envKey} to ~/.zshrc for future sessions?`,
+    message: `Save ${envKey} to shell profile for future sessions?`,
     initial: true,
   }, {
     onCancel: () => { /* non-fatal, just skip */ },
   });
 
   if (saveKey) {
-    const shellRc = path.join(os.homedir(), ".zshrc");
-    const exportLine = `\nexport ${envKey}="${apiKey}"\n`;
+    const shellRc = getShellRcPath();
+    const shellRcName = path.basename(shellRc);
+    // Escape double quotes, dollar signs, and backticks in the API key to prevent shell injection
+    const escapedKey = apiKey.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+    const exportLine = `\nexport ${envKey}="${escapedKey}"\n`;
     try {
       const existing = existsSync(shellRc) ? readFileSync(shellRc, "utf-8") : "";
       if (!existing.includes(envKey)) {
         writeFileSync(shellRc, existing + exportLine, "utf-8");
-        info(green(`✓ Added ${envKey} to ~/.zshrc`));
-        info(dim("  Run `source ~/.zshrc` or open a new terminal to apply."));
+        info(green(`✓ Added ${envKey} to ~/${shellRcName}`));
+        info(dim(`  Run \`source ~/${shellRcName}\` or open a new terminal to apply.`));
       } else {
-        info(dim(`${envKey} already exists in ~/.zshrc, skipping.`));
+        info(dim(`${envKey} already exists in ~/${shellRcName}, skipping.`));
       }
     } catch {
-      info(yellow(`Could not write to ~/.zshrc. Set ${envKey} manually.`));
+      info(yellow(`Could not write to ~/${shellRcName}. Set ${envKey} manually.`));
     }
   }
 
@@ -1423,7 +1427,10 @@ export interface HistoryOptions {
  * Requirements: 14.7
  */
 function formatTimestamp(timestamp: string): string {
-  const date = new Date(timestamp.endsWith("Z") ? timestamp : timestamp + "Z");
+  // SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" (space, no T, no Z).
+  // Normalize to ISO 8601 so Date() parses it as UTC.
+  const normalized = timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T');
+  const date = new Date(normalized.endsWith("Z") ? normalized : normalized + "Z");
   const now = Date.now();
   const diffMs = now - date.getTime();
   const diffSec = Math.floor(diffMs / 1000);
@@ -1792,7 +1799,14 @@ function setNestedValue(
   let current = result;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    current[part] = { ...(current[part] as Record<string, unknown> ?? {}) };
+    const existing = current[part];
+    // If the intermediate value is not an object, replace it with an empty object.
+    // This prevents spreading a primitive (string/number/boolean) into an object.
+    if (existing === null || typeof existing !== 'object' || Array.isArray(existing)) {
+      current[part] = {};
+    } else {
+      current[part] = { ...(existing as Record<string, unknown>) };
+    }
     current = current[part] as Record<string, unknown>;
   }
   current[parts[parts.length - 1]] = value;
@@ -2215,19 +2229,36 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 8. Prisma schema existence if Prisma detected (Req 16.9)
+  // 8. Prisma schema existence and model count (Req 16.9 + v0.2.0)
   // -------------------------------------------------------------------------
   {
     try {
       const project = detectProjectType(projectRoot);
       if (project.hasPrisma) {
         if (project.prismaSchemaPath && existsSync(project.prismaSchemaPath)) {
-          checks.push({ name: "prisma", status: "pass", message: `detected at ${project.prismaSchemaPath}` });
+          // v0.2.0: parse schema and report model count + provider
+          try {
+            const { parsePrismaSchema } = await import('./db/schema.js');
+            const schemaInfo = parsePrismaSchema(projectRoot);
+            if (schemaInfo) {
+              const providerLabel = schemaInfo.datasourceProvider ?? 'unknown';
+              checks.push({
+                name: 'prisma',
+                status: 'pass',
+                message: `${schemaInfo.path} (${providerLabel}, ${schemaInfo.models.length} models)`,
+              });
+            } else {
+              checks.push({ name: 'prisma', status: 'pass', message: `detected at ${project.prismaSchemaPath}` });
+            }
+          } catch {
+            checks.push({ name: 'prisma', status: 'pass', message: `detected at ${project.prismaSchemaPath}` });
+          }
         } else {
-          checks.push({ name: "prisma", status: "warn", message: "dependency detected but prisma/schema.prisma not found" });
+          checks.push({ name: 'prisma', status: 'warn', message: 'dependency detected but prisma/schema.prisma not found' });
         }
+      } else {
+        checks.push({ name: 'prisma', status: 'warn', message: 'no schema.prisma found (db commands unavailable)' });
       }
-      // If no Prisma, skip this check entirely
     } catch {
       // project detection already reported above
     }

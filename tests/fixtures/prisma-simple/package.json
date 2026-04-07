@@ -1,0 +1,8 @@
+{
+  "name": "prisma-simple-fixture",
+  "version": "1.0.0",
+  "dependencies": {
+    "prisma": "^5.0.0",
+    "@prisma/client": "^5.0.0"
+  }
+}

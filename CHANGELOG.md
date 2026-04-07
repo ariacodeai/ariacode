@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-07
+
+Upgrade Automation — AI-assisted dependency and framework upgrades with preview and safety gates.
+
+### Added
+
+**Commands**
+- `aria upgrade deps` — analyze outdated dependencies, classify by semver risk (patch/minor/major), propose grouped upgrades to `package.json` with preview and confirmation
+- `aria upgrade prisma` — Prisma-specific upgrade with version detection, migration guidance for major upgrades, and step-by-step next actions
+
+**Modules**
+- `src/upgrade/outdated.ts` — wraps `npm/pnpm/yarn/bun outdated --json` via subprocess, normalizes output across all package managers
+- `src/upgrade/classifier.ts` — semver-based risk classification (patch/minor/major/prerelease) using `semver.diff()`
+- `src/upgrade/changelog.ts` — fetches repository URLs from npm registry for release notes links; parallel HTTP requests
+- `src/upgrade/prisma-upgrade.ts` — detects current Prisma version from `package.json`, fetches latest from npm registry with subprocess fallback
+
+**Flags**
+- `--risk <patch|minor|major|all>` — filter upgrades by risk level (default: `minor` includes patch + minor)
+- `--dev` — include devDependencies in upgrade scope
+
+**Prompts**
+- `src/prompts/upgrade_deps.md` — system prompt for LLM-assisted major upgrade analysis
+- `src/prompts/upgrade_prisma.md` — system prompt for Prisma-specific migration guidance
+
+**Safety**
+- Aria never runs `npm install`, `pnpm install`, `yarn install`, or `bun install` — only modifies `package.json` and prints the install command for the user
+- Aria never runs `prisma migrate` — prints manual migration steps
+- Property tests 21 (no install commands) and 22 (no prisma migrate) enforce this statically
+
+**Tests**
+- `tests/unit/classifier.test.ts` — semver classification edge cases + Property 20 (classification correctness via fast-check)
+- `tests/unit/outdated.test.ts` — npm/pnpm/yarn output parsing with mocked subprocess
+- `tests/unit/upgrade-safety.test.ts` — Properties 21 and 22 (static source scan for forbidden subprocess calls)
+- CLI parser tests for `upgrade` subcommand, `--risk`, and `--dev` flags
+
+### Changed
+
+- Bumped version to `0.2.1`
+- Added `semver` (^7.6.0) to dependencies, `@types/semver` (^7.5.0) to devDependencies
+
+### Fixed
+
+- Removed duplicate `OllamaProvider.prototype.chat` override in `provider.ts` (dead code — identical to class method)
+- Added message array trimming in `agent.ts` to prevent unbounded memory growth during long sessions
+- Parallelized HTTP requests in `changelog.ts` (was sequential, now `Promise.all`)
+- Added response body drain on HTTP errors in `prisma-upgrade.ts` and `changelog.ts` to free TCP connections
+- Removed unused function parameters in `upgrade-deps.ts` and `upgrade-prisma.ts`
+- Fixed double session initialization in upgrade actions (was silently swallowing SQLite duplicate key errors)
+- Optimized `classifyUpgrade` in `classifier.ts` — reduced from 5 semver calls to 2
+
+## [0.2.0] - 2026-04-06
+
+Prisma DB Assistant — schema-aware database tooling for Prisma projects. No database connections, no query execution — all value comes from deep understanding of `schema.prisma` and static analysis of Prisma Client usage in code.
+
+### Added
+
+**Commands**
+- `aria db schema` — parse and render `schema.prisma` content (models, fields, relations, enums, indexes); supports `--json` and `--model <name>` filtering; no LLM call — instant and free
+- `aria db ask <question>` — Q&A over Prisma schema with Prisma Client code generation; warns on sensitive field access (password, token, secret, apiKey)
+- `aria db explain <description>` — analyze Prisma Client usage in code, identify N+1 queries, missing indexes, over-fetching; suggests `@@index` additions and query improvements
+- `aria db migrate <description>` — propose changes to `schema.prisma` with diff preview and confirmation; prints manual `prisma migrate` commands for user to run; never executes migrations
+
+**Modules**
+- `src/db/schema.ts` — Prisma schema parser wrapping `@mrleebo/prisma-ast`; extracts models, fields, relations, enums, indexes, generators, datasource provider
+- `src/db/summary.ts` — human-readable terminal rendering of parsed schema with color-coded tables
+- `src/db/client-usage.ts` — ripgrep-based Prisma Client usage finder (`prisma.model.operation` patterns)
+- `src/db/migrate.ts` — schema change proposal helpers, manual migration instruction generator
+
+**Tools**
+- `read_prisma_schema_parsed` — returns structured `PrismaSchemaInfo` for the project's schema
+- `find_prisma_usage` — searches for Prisma Client calls in TS/JS files with model/operation filtering
+- `find_model_references` — finds all references to a Prisma model name across the codebase
+- `propose_schema_change` — validates new schema content, generates diff, stores for confirmation
+- `apply_schema_change` — applies a previously proposed schema change atomically
+
+**Prompts**
+- `src/prompts/db_ask.md` — system prompt for schema Q&A and Prisma Client code generation
+- `src/prompts/db_explain.md` — system prompt for query analysis and performance optimization
+- `src/prompts/db_migrate.md` — system prompt for schema migration proposals
+
+**Doctor**
+- `aria doctor` now reports Prisma schema presence, provider, and model count
+
+**Tests**
+- Fixture projects: `prisma-simple`, `prisma-ecommerce`, `prisma-auth`, `prisma-relations`
+- `tests/db/schema.test.ts` — parser tests across all fixtures
+- `tests/db/summary.test.ts` — rendering tests
+- `tests/db/client-usage.test.ts` — Prisma Client usage finder tests
+
+### Changed
+
+- Bumped version to `0.2.0`
+- Added `@mrleebo/prisma-ast` (^0.15.0) to dependencies
+- Updated CLI parser to support `db` subcommand group with `schema`, `ask`, `explain`, `migrate` subcommands
+- Updated `aria --help` to list `db` command
+
 ## [0.1.0] - 2026-04-06
 
 Initial release of Aria Code CLI.

@@ -457,18 +457,20 @@ export class OllamaProvider extends OpenAICompatibleProvider {
 export class OpenRouterProvider extends OpenAICompatibleProvider {
   name = "openrouter";
   private apiKey: string;
+  private baseUrl: string;
 
-  constructor(apiKey?: string) {
+  constructor(apiKey?: string, baseUrl?: string) {
     super();
     const key = apiKey || process.env.OPENROUTER_API_KEY;
     if (!key) {
       throw new ProviderError("OPENROUTER_API_KEY environment variable is required", "openrouter");
     }
     this.apiKey = key;
+    this.baseUrl = baseUrl || process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
   }
 
   protected getEndpoint(): string {
-    return "https://openrouter.ai/api/v1/chat/completions";
+    return `${this.baseUrl}/chat/completions`;
   }
 
   protected getHeaders(): Record<string, string> {
@@ -630,7 +632,7 @@ export function zodToJsonSchema(schema: z.ZodSchema): Record<string, unknown> {
 /**
  * Create a provider instance based on configuration
  */
-export function createProvider(providerName: string): Provider {
+export function createProvider(providerName: string, config?: { openrouter?: { baseUrl?: string } }): Provider {
   switch (providerName) {
     case "anthropic":
       return new AnthropicProvider();
@@ -639,7 +641,7 @@ export function createProvider(providerName: string): Provider {
     case "ollama":
       return new OllamaProvider();
     case "openrouter":
-      return new OpenRouterProvider();
+      return new OpenRouterProvider(undefined, config?.openrouter?.baseUrl);
     default:
       throw new ProviderError(`Unsupported provider: ${providerName}`, providerName);
   }

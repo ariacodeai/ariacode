@@ -43,14 +43,18 @@ const SENSITIVE_PATTERN = /password|token|secret|hash|apiKey|stripeCustomerId|ss
 export interface DbAskOptions {
   question: string;
   session?: string;
-  model?: string; // Prisma model filter hint
+  prismaModel?: string; // Prisma model filter hint (--prisma-model)
   quiet?: boolean;
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override LLM model (v0.2.2) */
+  model?: string;
 }
 
 export async function runDbAsk(options: DbAskOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
-  const config = getConfig(projectRoot, { quiet: options.quiet });
+  const config = getConfig(projectRoot, { quiet: options.quiet, provider: options.provider, model: options.model });
   initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
 
   // Validate schema exists
@@ -86,7 +90,7 @@ export async function runDbAsk(options: DbAskOptions): Promise<void> {
 
   let provider;
   try {
-    provider = createProvider(config.provider.default);
+    provider = createProvider(config.provider.default, config.provider);
   } catch (err) {
     uiError(err instanceof Error ? err.message : String(err));
     updateSessionStatus(db, sessionId, 'failed', String(err));
@@ -119,8 +123,8 @@ export async function runDbAsk(options: DbAskOptions): Promise<void> {
 
   // Prepend sensitivity warning hint to question if relevant
   let userRequest = options.question;
-  if (options.model) {
-    userRequest = `[Focus on model: ${options.model}]\n\n${userRequest}`;
+  if (options.prismaModel) {
+    userRequest = `[Focus on model: ${options.prismaModel}]\n\n${userRequest}`;
   }
   if (SENSITIVE_PATTERN.test(options.question)) {
     userRequest = `[NOTE: This question may involve sensitive fields. Add a WARNING above the code.]\n\n${userRequest}`;

@@ -21,6 +21,9 @@ export interface ParsedArgs {
   session?: string;
   quiet: boolean;
   format: "text" | "json";
+  // v0.2.2: global provider/model overrides
+  provider?: string;
+  model?: string;
   // command-specific flags
   maxTokens?: number;
   output?: string;
@@ -75,6 +78,8 @@ ${pc.bold("GLOBAL OPTIONS:")}
   --session <id>        Resume or reference a session
   --quiet               Suppress non-essential output
   --format <text|json>  Output format (default: text)
+  --provider <name>     Override provider (anthropic, openai, ollama, openrouter)
+  --model <name>        Override model for this invocation
   --help, -h            Show this help message
   --version, -v         Show version number
 `;
@@ -173,7 +178,7 @@ ${pc.bold("SUBCOMMANDS:")}
   migrate <description> Propose changes to schema.prisma (never runs migrations)
 
 ${pc.bold("OPTIONS:")}
-  --model <name>        Filter to a specific Prisma model
+  --prisma-model <name> Filter to a specific Prisma model
   --file <path>         Focus on a specific file (db explain)
   --json                Output as JSON (db schema)
   --dry-run             Preview without applying (db migrate)
@@ -274,9 +279,14 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       args.dbJson = true;
     } else if (token === "--model") {
       i++;
-      args.dbModel = tokens[i];
+      args.model = tokens[i];
     } else if (token.startsWith("--model=")) {
-      args.dbModel = token.slice("--model=".length);
+      args.model = token.slice("--model=".length);
+    } else if (token === "--prisma-model") {
+      i++;
+      args.dbModel = tokens[i];
+    } else if (token.startsWith("--prisma-model=")) {
+      args.dbModel = token.slice("--prisma-model=".length);
     } else if (token === "--file") {
       i++;
       args.dbFile = tokens[i];
@@ -289,6 +299,11 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       args.upgradeRisk = token.slice("--risk=".length) as "patch" | "minor" | "major" | "all";
     } else if (token === "--dev") {
       args.upgradeDev = true;
+    } else if (token === "--provider") {
+      i++;
+      args.provider = tokens[i];
+    } else if (token.startsWith("--provider=")) {
+      args.provider = token.slice("--provider=".length);
     } else if (token === "--help" || token === "-h") {
       positionals.unshift("--help");
     } else if (token === "--version" || token === "-v") {

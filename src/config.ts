@@ -15,6 +15,14 @@ export const ProviderConfigSchema = z.object({
     .default("anthropic"),
   model: z.string().default("claude-sonnet-4-6"),
   maxTokens: z.number().int().positive().default(4096),
+  // Per-provider model overrides (v0.2.2)
+  anthropic: z.object({
+    model: z.string().optional(),
+  }).optional(),
+  openrouter: z.object({
+    model: z.string().optional(),
+    baseUrl: z.string().url().optional(),
+  }).optional(),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -162,6 +170,9 @@ export interface CLIFlags {
   maxTokens?: number;
   mode?: "plan" | "build";
   color?: "auto" | "always" | "never";
+  // v0.2.2: provider/model overrides
+  provider?: string;
+  model?: string;
 }
 
 /**
@@ -212,6 +223,20 @@ function loadEnvironmentConfig(): ConfigSource {
       config.provider = { ...config.provider, maxTokens };
     }
   }
+  // OpenRouter base URL override
+  if (process.env.OPENROUTER_BASE_URL) {
+    try {
+      new URL(process.env.OPENROUTER_BASE_URL); // validate URL format
+      config.provider = {
+        ...config.provider,
+        openrouter: { ...config.provider?.openrouter, baseUrl: process.env.OPENROUTER_BASE_URL },
+      };
+    } catch {
+      throw new ConfigError(
+        `Invalid OPENROUTER_BASE_URL: "${process.env.OPENROUTER_BASE_URL}" is not a valid URL`,
+      );
+    }
+  }
 
   // Agent configuration
   if (process.env.ARIA_MAX_ITERATIONS) {
@@ -260,6 +285,27 @@ function flagsToConfig(flags: CLIFlags): ConfigSource {
 
   if (flags.maxTokens !== undefined) {
     config.provider = { maxTokens: flags.maxTokens };
+  }
+
+  if (flags.provider !== undefined) {
+    const validProviders = ["anthropic", "openai", "ollama", "openrouter"] as const;
+    if (validProviders.includes(flags.provider as (typeof validProviders)[number])) {
+      config.provider = { ...config.provider, default: flags.provider as (typeof validProviders)[number] };
+    } else {
+      throw new ConfigError(
+        `Unknown provider "${flags.provider}". Valid providers: ${validProviders.join(", ")}`,
+      );
+    }
+  }
+
+  if (flags.model !== undefined) {
+    config.provider = {
+      ...config.provider,
+      model: flags.model,
+      // CLI --model overrides per-provider model settings from config files
+      anthropic: { model: undefined },
+      openrouter: { ...config.provider?.openrouter, model: undefined },
+    };
   }
 
   if (flags.mode !== undefined) {

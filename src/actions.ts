@@ -90,6 +90,21 @@ const DEFAULT_MODELS: Record<string, string> = {
 };
 
 /**
+ * Resolve the effective model for the current provider config.
+ * Per-provider model overrides take precedence over the global model setting.
+ */
+function resolveModel(config: Config): string {
+  const provider = config.provider.default;
+  if (provider === "anthropic" && config.provider.anthropic?.model) {
+    return config.provider.anthropic.model;
+  }
+  if (provider === "openrouter" && config.provider.openrouter?.model) {
+    return config.provider.openrouter.model;
+  }
+  return config.provider.model;
+}
+
+/**
  * Check if the given provider has its API key available.
  */
 function isProviderReady(providerName: string): boolean {
@@ -110,7 +125,7 @@ function isProviderReady(providerName: string): boolean {
 async function resolveProvider(config: Config): Promise<Provider> {
   // 1. Try the configured provider first
   if (isProviderReady(config.provider.default)) {
-    return createProvider(config.provider.default);
+    return createProvider(config.provider.default, config.provider);
   }
 
   // 2. Check if any other provider is already configured via env
@@ -120,7 +135,7 @@ async function resolveProvider(config: Config): Promise<Provider> {
       info(dim(`${config.provider.default} not configured, falling back to ${name}`));
       config.provider.default = name as typeof config.provider.default;
       config.provider.model = DEFAULT_MODELS[name] ?? config.provider.model;
-      return createProvider(name);
+      return createProvider(name, config.provider);
     }
   }
 
@@ -227,7 +242,7 @@ async function resolveProvider(config: Config): Promise<Provider> {
     }
   }
 
-  return createProvider(selectedProvider);
+  return createProvider(selectedProvider, config.provider);
 }
 
 /**
@@ -415,6 +430,10 @@ export interface AskOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override model (v0.2.2) */
+  model?: string;
 }
 
 /**
@@ -438,6 +457,8 @@ export async function runAsk(options: AskOptions): Promise<void> {
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     maxTokens: options.maxTokens,
+    provider: options.provider,
+    model: options.model,
   });
 
   // Initialize UI with config settings
@@ -477,7 +498,7 @@ export async function runAsk(options: AskOptions): Promise<void> {
       command: "ask",
       projectRoot,
       provider: config.provider.default,
-      model: config.provider.model,
+      model: resolveModel(config),
     });
   }
 
@@ -501,7 +522,7 @@ export async function runAsk(options: AskOptions): Promise<void> {
     projectRoot,
     sessionId,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
     mode: "plan",          // ask is always read-only
     dryRun: false,
     assumeYes: false,
@@ -577,6 +598,10 @@ export interface PlanOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override model (v0.2.2) */
+  model?: string;
 }
 
 /**
@@ -600,6 +625,8 @@ export async function runPlan(options: PlanOptions): Promise<void> {
   // 1. Load configuration (Req 10.1)
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
+    provider: options.provider,
+    model: options.model,
   });
 
   // Initialize UI with config settings
@@ -639,7 +666,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
       command: "plan",
       projectRoot,
       provider: config.provider.default,
-      model: config.provider.model,
+      model: resolveModel(config),
     });
   }
 
@@ -663,7 +690,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
     projectRoot,
     sessionId,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
     mode: "plan",          // plan is always read-only
     dryRun: false,
     assumeYes: false,
@@ -745,6 +772,10 @@ export interface PatchOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override model (v0.2.2) */
+  model?: string;
 }
 
 /**
@@ -773,6 +804,8 @@ export async function runPatch(options: PatchOptions): Promise<void> {
   // 1. Load configuration (Req 11.1)
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
+    provider: options.provider,
+    model: options.model,
   });
 
   // Apply flag overrides to config
@@ -804,7 +837,7 @@ export async function runPatch(options: PatchOptions): Promise<void> {
       command: "patch",
       projectRoot,
       provider: config.provider.default,
-      model: config.provider.model,
+      model: resolveModel(config),
     });
   }
 
@@ -828,7 +861,7 @@ export async function runPatch(options: PatchOptions): Promise<void> {
     projectRoot,
     sessionId,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
     mode: "build",
     dryRun: Boolean(options.dryRun),
     assumeYes: Boolean(options.yes),
@@ -922,6 +955,10 @@ export interface ReviewOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override model (v0.2.2) */
+  model?: string;
 }
 
 /**
@@ -1093,6 +1130,8 @@ export async function runReview(options: ReviewOptions): Promise<void> {
   // 1. Load configuration (Req 12.1)
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
+    provider: options.provider,
+    model: options.model,
   });
 
   // Initialize UI with config settings
@@ -1110,7 +1149,7 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     command: "review",
     projectRoot,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
   });
 
   // Resolve provider (interactive setup if needed)
@@ -1133,7 +1172,7 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     projectRoot,
     sessionId,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
     mode: "plan",   // review is always read-only
     dryRun: false,
     assumeYes: false,
@@ -1251,6 +1290,10 @@ export interface ExploreOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override model (v0.2.2) */
+  model?: string;
 }
 
 /**
@@ -1277,6 +1320,8 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
   // 1. Load configuration (Req 13.1)
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
+    provider: options.provider,
+    model: options.model,
   });
 
   // Initialize UI with config settings
@@ -1294,7 +1339,7 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
     command: "explore",
     projectRoot,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
   });
 
   // 3. Resolve provider (interactive setup if needed)
@@ -1317,7 +1362,7 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
     projectRoot,
     sessionId,
     provider: config.provider.default,
-    model: config.provider.model,
+    model: resolveModel(config),
     mode: "plan",   // explore is always read-only
     dryRun: false,
     assumeYes: false,
@@ -2184,28 +2229,40 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6. Provider readiness — API key presence (Req 16.7) — CRITICAL
+  // 6. Provider readiness — API key presence (Req 16.7) — CRITICAL for default
+  // v0.2.2: report all configured providers, fail only if default key is missing
   // -------------------------------------------------------------------------
   {
-    const provider = config?.provider.default ?? "anthropic";
-    const keyMap: Record<string, string> = {
+    const defaultProvider = config?.provider.default ?? "anthropic";
+    const keyMap: Record<string, string | null> = {
       anthropic: "ANTHROPIC_API_KEY",
       openai: "OPENAI_API_KEY",
       openrouter: "OPENROUTER_API_KEY",
-      ollama: "", // no key needed
+      ollama: null, // no key needed
     };
-    const envKey = keyMap[provider];
-    if (!envKey) {
-      // Ollama — no API key required
-      checks.push({ name: "provider", status: "pass", message: `${provider} (no API key required)` });
-    } else if (process.env[envKey]) {
-      checks.push({ name: "provider", status: "pass", message: `${provider} (${envKey} present)` });
+
+    // Critical check: default provider must be ready
+    const defaultEnvKey = keyMap[defaultProvider];
+    if (defaultEnvKey === null) {
+      checks.push({ name: "provider", status: "pass", message: `${defaultProvider} (no API key required)` });
+    } else if (process.env[defaultEnvKey]) {
+      const model = config?.provider.model ?? "default";
+      checks.push({ name: "provider", status: "pass", message: `${defaultProvider} (${defaultEnvKey} present, model: ${model})` });
     } else {
       checks.push({
         name: "provider",
         status: "fail",
-        message: `${provider} (${envKey} not set)`,
+        message: `${defaultProvider} (${defaultEnvKey} not set)`,
       });
+    }
+
+    // Non-critical: only report secondary providers that are actually configured (key present)
+    const secondaryProviders = Object.entries(keyMap).filter(([name]) => name !== defaultProvider && name !== "ollama");
+    for (const [name, envKey] of secondaryProviders) {
+      if (envKey && process.env[envKey]) {
+        checks.push({ name: `provider:${name}`, status: "pass", message: `${name} (${envKey} present)` });
+      }
+      // Don't warn about unconfigured secondary providers — too noisy on vanilla installs
     }
   }
 

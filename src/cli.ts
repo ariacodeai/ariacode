@@ -114,6 +114,8 @@ export function run(): void {
         session: args.session,
         maxTokens: args.maxTokens,
         quiet: args.quiet,
+        provider: args.provider,
+        model: args.model,
       }).catch(handleError);
       break;
 
@@ -123,6 +125,8 @@ export function run(): void {
         session: args.session,
         output: args.output,
         quiet: args.quiet,
+        provider: args.provider,
+        model: args.model,
       }).catch(handleError);
       break;
 
@@ -133,6 +137,8 @@ export function run(): void {
         yes: args.assumeYes,
         session: args.session,
         quiet: args.quiet,
+        provider: args.provider,
+        model: args.model,
       }).catch(handleError);
       break;
 
@@ -142,6 +148,8 @@ export function run(): void {
         branch: args.branch,
         format: args.format as 'text' | 'json' | undefined,
         quiet: args.quiet,
+        provider: args.provider,
+        model: args.model,
       }).catch(handleError);
       break;
 
@@ -170,6 +178,8 @@ export function run(): void {
         depth: args.depth,
         save: args.save,
         quiet: args.quiet,
+        provider: args.provider,
+        model: args.model,
       }).catch(handleError);
       break;
 
@@ -178,7 +188,7 @@ export function run(): void {
         case 'schema':
           runDbSchema({
             json: args.dbJson,
-            model: args.dbModel,
+            prismaModel: args.dbModel,
             quiet: args.quiet,
           }).catch(handleError);
           break;
@@ -190,8 +200,10 @@ export function run(): void {
           runDbAsk({
             question: args.dbQuestion,
             session: args.session,
-            model: args.dbModel,
+            prismaModel: args.dbModel,
             quiet: args.quiet,
+            provider: args.provider,
+            model: args.model,
           }).catch(handleError);
           break;
         case 'explain':
@@ -204,6 +216,8 @@ export function run(): void {
             file: args.dbFile,
             session: args.session,
             quiet: args.quiet,
+            provider: args.provider,
+            model: args.model,
           }).catch(handleError);
           break;
         case 'migrate':
@@ -217,6 +231,8 @@ export function run(): void {
             yes: args.assumeYes,
             session: args.session,
             quiet: args.quiet,
+            provider: args.provider,
+            model: args.model,
           }).catch(handleError);
           break;
         default:
@@ -235,6 +251,8 @@ export function run(): void {
             dev: args.upgradeDev,
             session: args.session,
             quiet: args.quiet,
+            provider: args.provider,
+            model: args.model,
           }).catch(handleError);
           break;
         case 'prisma':
@@ -243,6 +261,8 @@ export function run(): void {
             yes: args.assumeYes,
             session: args.session,
             quiet: args.quiet,
+            provider: args.provider,
+            model: args.model,
           }).catch(handleError);
           break;
         default:

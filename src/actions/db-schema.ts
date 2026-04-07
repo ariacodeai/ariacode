@@ -11,7 +11,7 @@ import * as path from 'node:path';
 
 export interface DbSchemaOptions {
   json?: boolean;
-  model?: string;
+  prismaModel?: string;
   quiet?: boolean;
   projectRoot?: string;
 }
@@ -34,12 +34,12 @@ export async function runDbSchema(options: DbSchemaOptions): Promise<void> {
   }
 
   // --model <name>: filter to single model
-  if (options.model) {
+  if (options.prismaModel) {
     const model = schemaInfo.models.find(
-      (m) => m.name.toLowerCase() === options.model!.toLowerCase(),
+      (m) => m.name.toLowerCase() === options.prismaModel!.toLowerCase(),
     );
     if (!model) {
-      uiError(`Model "${options.model}" not found in schema. Available: ${schemaInfo.models.map((m) => m.name).join(', ')}`);
+      uiError(`Model "${options.prismaModel}" not found in schema. Available: ${schemaInfo.models.map((m) => m.name).join(', ')}`);
       process.exit(2);
     }
     const colorEnabled = config.ui.color !== 'never';

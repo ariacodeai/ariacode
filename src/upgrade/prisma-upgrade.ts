@@ -52,8 +52,11 @@ export async function fetchLatestVersion(packageName: string): Promise<string> {
       await res.text().catch(() => {});
       throw new Error(`HTTP ${res.status}`);
     }
-    const data = (await res.json()) as any;
-    return data.version ?? '';
+    const data: unknown = await res.json();
+    const version = data && typeof data === 'object' && 'version' in data && typeof (data as Record<string, unknown>).version === 'string'
+      ? (data as Record<string, string>).version
+      : '';
+    return version;
   } catch {
     // Fallback: use npm view via subprocess
     return npmViewVersion(packageName);

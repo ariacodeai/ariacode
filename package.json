@@ -1,11 +1,11 @@
 {
   "name": "@ariacode/cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A predictable coding agent for Next.js, Nest.js, Prisma and Node.js projects.",
   "homepage": "https://www.ariacode.run",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ariacodeai/ariacode.git"
+    "url": "git+https://github.com/ariacodeai/ariacode.git"
   },
   "bugs": {
     "url": "https://github.com/ariacodeai/ariacode/issues"
@@ -16,7 +16,7 @@
   },
   "type": "module",
   "bin": {
-    "aria": "./dist/cli.js"
+    "aria": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -36,7 +36,7 @@
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc && cp -r src/prompts dist/prompts",
+    "build": "rm -rf dist && tsc && cp -r src/prompts dist/prompts",
     "start": "node dist/cli.js",
     "check": "tsc --noEmit",
     "format": "prettier --write .",

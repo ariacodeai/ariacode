@@ -38,11 +38,15 @@ export interface UpgradePrismaOptions {
   session?: string;
   quiet?: boolean;
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override LLM model (v0.2.2) */
+  model?: string;
 }
 
 export async function runUpgradePrisma(options: UpgradePrismaOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
-  const config = getConfig(projectRoot, { quiet: options.quiet });
+  const config = getConfig(projectRoot, { quiet: options.quiet, provider: options.provider, model: options.model });
   initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
 
   const project = detectProjectType(projectRoot);
@@ -213,7 +217,7 @@ async function generateMigrationGuidance(
   info(bold('Prisma upgrade analysis:'));
 
   try {
-    const provider = createProvider(config.provider.default);
+    const provider = createProvider(config.provider.default, config.provider);
     const db = initializeDatabase();
     const sessionId = resolveOrCreateSession(db, {
       command: 'upgrade prisma analysis',

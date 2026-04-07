@@ -51,11 +51,15 @@ export interface DbMigrateOptions {
   session?: string;
   quiet?: boolean;
   projectRoot?: string;
+  /** Override provider (v0.2.2) */
+  provider?: string;
+  /** Override LLM model (v0.2.2) */
+  model?: string;
 }
 
 export async function runDbMigrate(options: DbMigrateOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
-  const config = getConfig(projectRoot, { quiet: options.quiet });
+  const config = getConfig(projectRoot, { quiet: options.quiet, provider: options.provider, model: options.model });
   initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
 
   const schemaInfo = parsePrismaSchema(projectRoot);
@@ -87,7 +91,7 @@ export async function runDbMigrate(options: DbMigrateOptions): Promise<void> {
 
   let provider;
   try {
-    provider = createProvider(config.provider.default);
+    provider = createProvider(config.provider.default, config.provider);
   } catch (err) {
     uiError(err instanceof Error ? err.message : String(err));
     updateSessionStatus(db, sessionId, 'failed', String(err));

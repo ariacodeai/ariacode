@@ -32,6 +32,9 @@ After installation the `aria` binary is available globally.
 # Ask a question about your codebase
 aria ask "How is authentication handled in this project?"
 
+# Use a different provider for a single command
+aria ask "Explain the data model" --provider openrouter --model deepseek/deepseek-chat
+
 # Generate an implementation plan (read-only, no changes)
 aria plan "Add rate limiting to the API routes"
 
@@ -70,7 +73,7 @@ aria doctor
 Ask a read-only question about the repository. The agent uses `read_file`, `list_directory`, and `search_code` to explore the codebase and answer your question.
 
 ```
-aria ask "<question>" [--session <id>] [--max-tokens <n>] [--quiet]
+aria ask "<question>" [--session <id>] [--max-tokens <n>] [--quiet] [--provider <name>] [--model <name>]
 ```
 
 | Flag | Description |
@@ -78,6 +81,8 @@ aria ask "<question>" [--session <id>] [--max-tokens <n>] [--quiet]
 | `--session <id>` | Resume an existing session |
 | `--max-tokens <n>` | Override max tokens for this response |
 | `--quiet` | Suppress non-essential output |
+| `--provider <name>` | Override provider for this command |
+| `--model <name>` | Override LLM model for this command |
 
 ### `aria plan <goal>`
 
@@ -174,13 +179,13 @@ aria doctor [--format text|json]
 Parse and render `schema.prisma` content — models, fields, relations, enums, indexes. No LLM call, instant and free.
 
 ```
-aria db schema [--json] [--model <name>]
+aria db schema [--json] [--prisma-model <name>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--json` | Output raw `PrismaSchemaInfo` as JSON |
-| `--model <name>` | Filter to a single model |
+| `--prisma-model <name>` | Filter to a single Prisma model |
 
 Example output:
 
@@ -209,7 +214,7 @@ Enums (1)
 Q&A over your Prisma schema. Generates runnable Prisma Client code. Warns when queries touch sensitive fields (password, token, secret, apiKey).
 
 ```
-aria db ask "<question>" [--session <id>] [--model <prisma-model>]
+aria db ask "<question>" [--session <id>] [--prisma-model <name>] [--provider <name>] [--model <name>]
 ```
 
 ### `aria db explain <description>`
@@ -344,6 +349,14 @@ default = "anthropic"       # anthropic | openai | ollama | openrouter
 model = "claude-sonnet-4-6"
 max_tokens = 4096
 
+# Per-provider overrides (optional)
+[provider.anthropic]
+model = "claude-sonnet-4-6"       # override model when using Anthropic
+
+[provider.openrouter]
+model = "deepseek/deepseek-chat"  # override model when using OpenRouter
+base_url = "https://openrouter.ai/api/v1"  # custom endpoint (optional)
+
 [agent]
 max_iterations = 25
 mode = "build"              # build | plan
@@ -372,6 +385,7 @@ Run `aria config init` to generate a `.aria.toml` in the current directory.
 | `ANTHROPIC_API_KEY` | API key for Anthropic provider |
 | `OPENAI_API_KEY` | API key for OpenAI provider |
 | `OPENROUTER_API_KEY` | API key for OpenRouter provider |
+| `OPENROUTER_BASE_URL` | Custom base URL for OpenRouter-compatible endpoints |
 | `ARIA_PROVIDER` | Override default provider |
 | `ARIA_MODEL` | Override model name |
 | `ARIA_MAX_TOKENS` | Override max tokens |

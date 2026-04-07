@@ -164,3 +164,56 @@ describe("getConfig", () => {
     expect(() => getConfig(tmpDir)).toThrow(ConfigError);
   });
 });
+
+describe("v0.2.2 provider/model flag overrides", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "aria-v022-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("--provider flag overrides default provider", () => {
+    const config = getConfig(tmpDir, { provider: "openrouter" });
+    expect(config.provider.default).toBe("openrouter");
+  });
+
+  it("--model flag overrides model", () => {
+    const config = getConfig(tmpDir, { model: "deepseek/deepseek-chat" });
+    expect(config.provider.model).toBe("deepseek/deepseek-chat");
+  });
+
+  it("per-provider openrouter.model is preserved in config", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".aria.toml"),
+      `[provider]\ndefault = "openrouter"\n\n[provider.openrouter]\nmodel = "qwen/qwen-2.5-72b-instruct"\n`
+    );
+    const config = getConfig(tmpDir);
+    expect(config.provider.openrouter?.model).toBe("qwen/qwen-2.5-72b-instruct");
+  });
+
+  it("per-provider openrouter.baseUrl is preserved in config", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".aria.toml"),
+      `[provider]\ndefault = "openrouter"\n\n[provider.openrouter]\nbaseUrl = "https://custom.openrouter.ai/api/v1"\n`
+    );
+    const config = getConfig(tmpDir);
+    expect(config.provider.openrouter?.baseUrl).toBe("https://custom.openrouter.ai/api/v1");
+  });
+
+  it("per-provider anthropic.model is preserved in config", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, ".aria.toml"),
+      `[provider]\ndefault = "anthropic"\n\n[provider.anthropic]\nmodel = "claude-opus-4-5"\n`
+    );
+    const config = getConfig(tmpDir);
+    expect(config.provider.anthropic?.model).toBe("claude-opus-4-5");
+  });
+
+  it("invalid provider flag throws ConfigError", () => {
+    expect(() => getConfig(tmpDir, { provider: "unknown-provider" })).toThrow(ConfigError);
+  });
+});

@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-07
+
+Provider Expansion — global `--provider` and `--model` flags, per-provider config overrides, and full provider support across all commands including `db` and `upgrade`.
+
+### Added
+
+**Global CLI Flags**
+- `--provider <name>` — override the default provider for a single command (`anthropic`, `openai`, `ollama`, `openrouter`)
+- `--model <name>` — override the LLM model for a single command (e.g. `deepseek/deepseek-chat`, `gpt-4o`)
+- `--prisma-model <name>` — filter to a specific Prisma model in `db` commands (replaces the previous `--model` flag in `db` context)
+
+**Per-Provider Configuration**
+- `[provider.anthropic]` section in TOML config with optional `model` override
+- `[provider.openrouter]` section in TOML config with optional `model` and `baseUrl` overrides
+- `OPENROUTER_BASE_URL` environment variable for custom OpenRouter-compatible endpoints
+
+**Provider Support in All Commands**
+- `aria db ask`, `aria db explain`, `aria db migrate` now accept `--provider` and `--model`
+- `aria upgrade deps`, `aria upgrade prisma` now accept `--provider` and `--model`
+
+**Doctor Improvements**
+- Provider check now shows the active model name
+- Secondary providers with configured API keys are reported as available
+
+**Tests**
+- CLI parser tests for `--provider`, `--model`, `--prisma-model` flags and their `=` syntax variants
+- Config tests for per-provider overrides, `--provider` flag validation, and `baseUrl` from TOML
+
+### Changed
+
+- `--model` is now a global flag for LLM model selection; use `--prisma-model` for Prisma model filtering in `db` commands
+- Invalid `--provider` value now throws `ConfigError` with a clear message listing valid providers (was silently ignored)
+- CLI `--model` flag takes precedence over per-provider model overrides from config files
+- `OPENROUTER_BASE_URL` is validated as a URL before being passed to config (invalid URL throws `ConfigError`)
+- Doctor no longer warns about unconfigured secondary providers — only reports providers with keys present
+- `OpenRouterProvider` accepts a configurable `baseUrl` via constructor, config, or environment variable
+- Default OpenRouter model aligned to `anthropic/claude-sonnet-4-6` (was `anthropic/claude-sonnet-4`)
+- Help text for `--provider` now lists all four valid providers
+
+### Fixed
+
+- `aria db ask --provider openrouter` was silently ignored — provider/model flags now forwarded to all `db` and `upgrade` sub-actions
+- `--model` in `db` commands no longer collides with the global LLM model flag — Prisma model filtering moved to `--prisma-model`
+- `prisma-upgrade.ts` `fetchLatestVersion` — removed `as any` cast, narrowed npm registry response to proper type guard
+- `resolveModel()` precedence: CLI `--model` now correctly overrides per-provider model from config files
+
 ## [0.2.1] - 2026-04-07
 
 Upgrade Automation — AI-assisted dependency and framework upgrades with preview and safety gates.

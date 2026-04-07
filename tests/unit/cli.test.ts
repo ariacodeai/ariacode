@@ -255,4 +255,48 @@ describe("parseCLI — upgrade subcommand", () => {
     const args = parseCLI(["upgrade", "prisma", "--yes"]);
     expect(args.assumeYes).toBe(true);
   });
+
+  // v0.2.2: --provider and --model global flags
+  it("parses --provider flag", () => {
+    const args = parseCLI(["ask", "question", "--provider", "openrouter"]);
+    expect(args.provider).toBe("openrouter");
+  });
+
+  it("parses --provider= syntax", () => {
+    const args = parseCLI(["ask", "question", "--provider=openrouter"]);
+    expect(args.provider).toBe("openrouter");
+  });
+
+  it("parses --model flag", () => {
+    const args = parseCLI(["ask", "question", "--model", "deepseek/deepseek-chat"]);
+    expect(args.model).toBe("deepseek/deepseek-chat");
+  });
+
+  it("parses --model= syntax", () => {
+    const args = parseCLI(["ask", "question", "--model=qwen/qwen-2.5-72b-instruct"]);
+    expect(args.model).toBe("qwen/qwen-2.5-72b-instruct");
+  });
+
+  it("provider and model default to undefined", () => {
+    const args = parseCLI(["ask", "question"]);
+    expect(args.provider).toBeUndefined();
+    expect(args.model).toBeUndefined();
+  });
+
+  it("parses --prisma-model flag for db commands", () => {
+    const args = parseCLI(["db", "schema", "--prisma-model", "User"]);
+    expect(args.dbModel).toBe("User");
+    expect(args.model).toBeUndefined();
+  });
+
+  it("parses --prisma-model= syntax", () => {
+    const args = parseCLI(["db", "ask", "question", "--prisma-model=Post"]);
+    expect(args.dbModel).toBe("Post");
+  });
+
+  it("--model and --prisma-model are independent", () => {
+    const args = parseCLI(["db", "ask", "question", "--model", "gpt-4o", "--prisma-model", "User"]);
+    expect(args.model).toBe("gpt-4o");
+    expect(args.dbModel).toBe("User");
+  });
 });

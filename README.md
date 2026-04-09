@@ -102,13 +102,15 @@ aria plan "<goal>" [--session <id>] [--output <path>]
 Analyze the repository, propose a unified diff, show a preview, and apply changes atomically after confirmation.
 
 ```
-aria patch "<description>" [--dry-run] [--yes] [--session <id>]
+aria patch "<description>" [--dry-run] [--yes] [--split] [--format text|json|ndjson|plain] [--session <id>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | Preview the diff without applying changes |
 | `--yes` | Skip the confirmation prompt |
+| `--split` | Render diff side-by-side (requires terminal width > 120 columns) |
+| `--format plain` | Plain-text diff output with no ANSI codes; requires `--yes` |
 | `--session <id>` | Resume an existing session |
 
 ### `aria review`
@@ -116,14 +118,14 @@ aria patch "<description>" [--dry-run] [--yes] [--session <id>]
 Review git changes with AI assistance. Reads staged changes by default and returns a structured review with summary, issues, and suggestions.
 
 ```
-aria review [--unstaged] [--branch <base>] [--format text|json]
+aria review [--unstaged] [--branch <base>] [--format text|json|ndjson|plain]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--unstaged` | Review unstaged changes instead of staged |
 | `--branch <base>` | Compare current branch to a base branch |
-| `--format json` | Output the review as JSON |
+| `--format <fmt>` | Output format: `text` (default), `json`, `ndjson`, `plain` |
 
 ### `aria explore`
 
@@ -143,14 +145,30 @@ aria explore [--depth <n>] [--save]
 Inspect past sessions stored in the local SQLite database.
 
 ```
-aria history [--limit <n>] [--session <id>] [--tree]
+aria history [--limit <n>] [--session <id>] [--tree] [--format text|json|ndjson|plain]
+aria history search "<query>"
+aria history [--command <cmd>] [--since "<expr>"] [--status <status>]
+aria history --session <id> --export <path>
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--limit <n>` | Limit the number of sessions shown |
+| `--limit <n>` | Limit the number of sessions shown (default: 20) |
 | `--session <id>` | Show the full log for a specific session |
-| `--tree` | Render the tool execution tree |
+| `--tree` | Render the tool execution tree with type icons (`[R]` read, `[S]` search, `[W]` mutation, `[.]` other) |
+| `--command <cmd>` | Filter sessions by command name |
+| `--since "<expr>"` | Filter by date — supports `"N days ago"`, `"N hours ago"`, `"N minutes ago"`, or ISO 8601 |
+| `--status <status>` | Filter by status: `running`, `completed`, `failed`, `cancelled` |
+| `--export <path>` | Export session transcript as a markdown file (requires `--session`) |
+| `--format <fmt>` | Output format: `text` (default), `json`, `ndjson`, `plain` |
+
+**Search example:**
+
+```bash
+aria history search "rate limiting"
+aria history --command patch --status completed --since "7 days ago"
+aria history --session abc123 --export ./session-transcript.md
+```
 
 ### `aria config`
 
@@ -171,7 +189,7 @@ aria config init                   # Create ./.aria.toml with defaults
 Run environment diagnostics: Node.js version, git, ripgrep, config validity, history DB, provider API keys, project detection, and Prisma schema presence.
 
 ```
-aria doctor [--format text|json]
+aria doctor [--format text|json|ndjson|plain]
 ```
 
 ### `aria db schema`
@@ -553,6 +571,33 @@ See the full model catalogue at [openrouter.ai/models](https://openrouter.ai/mod
 | `5` | Project detection error / Prisma not found |
 | `130` | User cancelled (Ctrl+C or declined confirmation) |
 
+## Structured Output
+
+All data-producing commands support `--format json`, `--format ndjson`, and `--format plain` for scripting and pipeline integration.
+
+| Format | Description |
+|--------|-------------|
+| `text` | Default — colored terminal output |
+| `json` | Single validated JSON object to stdout; all spinner/info output suppressed |
+| `ndjson` | One JSON object per line; final `{"version":"1","event":"done"}` on success |
+| `plain` | Tab-separated output with no ANSI codes and no box-drawing characters |
+
+All JSON output includes a top-level `"version": "1"` field for downstream stability.
+
+On failure with `--format json`, a JSON error object is written to **stderr** and stdout remains empty:
+
+```json
+{"version":"1","error":"Provider API key not configured","exitCode":4}
+```
+
+On failure with `--format ndjson`, an error event is emitted to **stderr**:
+
+```json
+{"version":"1","event":"error","error":"Provider API key not configured"}
+```
+
+**Commands that support `--format`:** `ask`, `plan`, `patch`, `review`, `explore`, `db schema`, `db ask`, `db explain`, `history`, `doctor`, `upgrade deps`
+
 ## Session History
 
 Every command execution is logged to `~/.aria/history.db` (SQLite). Sessions record messages, tool executions, and mutations. The database is created automatically on first run with permissions set to `600` (user-only).
@@ -564,6 +609,14 @@ aria history
 aria history --limit 10
 aria history --session <id>
 aria history --session <id> --tree
+
+# Search and filter
+aria history search "authentication"
+aria history --command patch --status completed
+aria history --since "3 days ago"
+
+# Export a session transcript
+aria history --session <id> --export ./transcript.md
 ```
 
 Sessions older than `retain_days` (default: 90) are cleaned up automatically.

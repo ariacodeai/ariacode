@@ -7,7 +7,7 @@ import * as os from "node:os";
 
 /**
  * Provider configuration
- * Supports Anthropic, OpenAI, Ollama, and OpenRouter
+ * Supports Anthropic, OpenAI, Ollama and OpenRouter
  */
 export const ProviderConfigSchema = z.object({
   default: z

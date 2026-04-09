@@ -177,3 +177,78 @@ describe("formatPaths", () => {
     expect(formatPaths([], "/project")).toEqual([]);
   });
 });
+
+// Feature: aria-code-v023, Property 14: legacy diff renderer backward compatibility
+import * as fc from "fast-check";
+
+describe("backward-compatibility: renderDiff and generateAndRenderDiff exports", () => {
+  it("renderDiff is exported as a function", async () => {
+    const mod = await import("../../src/ui.js");
+    expect(typeof mod.renderDiff).toBe("function");
+  });
+
+  it("generateAndRenderDiff is exported as a function", async () => {
+    const mod = await import("../../src/ui.js");
+    expect(typeof mod.generateAndRenderDiff).toBe("function");
+  });
+});
+
+describe("backward-compatibility: renderDiff property-based tests", () => {
+  beforeEach(() => {
+    initUI("never", false);
+  });
+
+  /**
+   * Validates: Requirements 12.5
+   *
+   * Property 14: Legacy diff renderer backward compatibility
+   * For any valid unified diff string `d`, every `+`-prefixed line (excluding `+++`)
+   * and `-`-prefixed line (excluding `---`) in `d` appears in `renderDiff(d)`.
+   */
+  it("Property 14: renderDiff preserves all added/removed lines from the input diff", () => {
+    // Arbitrary that generates a unified diff with known added/removed lines
+    const unifiedDiffArbitrary = fc
+      .array(
+        fc.record({
+          type: fc.constantFrom("add", "remove", "context"),
+          content: fc.string({ minLength: 1, maxLength: 40 }).filter(
+            (s) => !s.startsWith("+") && !s.startsWith("-") && !s.startsWith("@") && !s.includes("\n")
+          ),
+        }),
+        { minLength: 1, maxLength: 10 }
+      )
+      .map((lines) => {
+        const header = `--- a/file.ts\n+++ b/file.ts\n@@ -1,${lines.length} +1,${lines.length} @@`;
+        const body = lines
+          .map((l) => {
+            if (l.type === "add") return `+${l.content}`;
+            if (l.type === "remove") return `-${l.content}`;
+            return ` ${l.content}`;
+          })
+          .join("\n");
+        return `${header}\n${body}\n`;
+      });
+
+    fc.assert(
+      fc.property(unifiedDiffArbitrary, (diff) => {
+        const result = renderDiff(diff);
+
+        // Extract all +/- lines (excluding file headers +++ / ---)
+        const inputChanges = diff
+          .split("\n")
+          .filter(
+            (l) =>
+              (l.startsWith("+") && !l.startsWith("+++")) ||
+              (l.startsWith("-") && !l.startsWith("---"))
+          );
+
+        // Every change line from the input must appear in the output
+        for (const line of inputChanges) {
+          if (!result.includes(line)) return false;
+        }
+        return true;
+      }),
+      { numRuns: 100 }
+    );
+  });
+});

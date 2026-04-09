@@ -27,7 +27,6 @@ export { parseCLI, validateArgs } from './parser.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Maps a thrown error to the appropriate exit code per Requirements 19.1–19.7:
  *   0  – success (never thrown)
  *   1  – generic error
  *   2  – invalid arguments
@@ -49,13 +48,11 @@ function exitCodeFor(err: unknown): number {
 
 /**
  * Central error handler. Writes to stderr and exits with the correct code.
- * Shows stack trace only when DEBUG env var is set (Requirement 19.8).
  */
 export function handleError(err: unknown): never {
   const debug = Boolean(process.env['DEBUG']);
   const message = err instanceof Error ? err.message : String(err);
 
-  // Requirement 19.9: error messages go to stderr
   process.stderr.write(pc.red('Error: ') + message + '\n');
 
   if (debug && err instanceof Error && err.stack) {
@@ -104,7 +101,7 @@ export function run(): void {
   switch (args.command) {
     case 'doctor':
       runDoctor({
-        format: args.format as 'text' | 'json' | undefined,
+        format: args.format as 'text' | 'json' | 'ndjson' | 'plain' | undefined,
       }).catch(handleError);
       break;
 
@@ -116,6 +113,7 @@ export function run(): void {
         quiet: args.quiet,
         provider: args.provider,
         model: args.model,
+        format: args.format,
       }).catch(handleError);
       break;
 
@@ -127,6 +125,7 @@ export function run(): void {
         quiet: args.quiet,
         provider: args.provider,
         model: args.model,
+        format: args.format,
       }).catch(handleError);
       break;
 
@@ -139,6 +138,8 @@ export function run(): void {
         quiet: args.quiet,
         provider: args.provider,
         model: args.model,
+        split: args.historySplit,
+        format: args.format,
       }).catch(handleError);
       break;
 
@@ -146,7 +147,7 @@ export function run(): void {
       runReview({
         unstaged: args.unstaged,
         branch: args.branch,
-        format: args.format as 'text' | 'json' | undefined,
+        format: args.format,
         quiet: args.quiet,
         provider: args.provider,
         model: args.model,
@@ -170,6 +171,12 @@ export function run(): void {
         session: args.session,
         tree: args.tree,
         quiet: args.quiet,
+        search: args.historySearch,
+        command: args.historyCommand,
+        since: args.historySince,
+        status: args.historyStatus,
+        export: args.historyExport,
+        format: args.format,
       }).catch(handleError);
       break;
 
@@ -180,6 +187,7 @@ export function run(): void {
         quiet: args.quiet,
         provider: args.provider,
         model: args.model,
+        format: args.format,
       }).catch(handleError);
       break;
 
@@ -190,6 +198,7 @@ export function run(): void {
             json: args.dbJson,
             prismaModel: args.dbModel,
             quiet: args.quiet,
+            format: args.format,
           }).catch(handleError);
           break;
         case 'ask':
@@ -204,6 +213,7 @@ export function run(): void {
             quiet: args.quiet,
             provider: args.provider,
             model: args.model,
+            format: args.format,
           }).catch(handleError);
           break;
         case 'explain':
@@ -218,6 +228,7 @@ export function run(): void {
             quiet: args.quiet,
             provider: args.provider,
             model: args.model,
+            format: args.format,
           }).catch(handleError);
           break;
         case 'migrate':
@@ -253,6 +264,7 @@ export function run(): void {
             quiet: args.quiet,
             provider: args.provider,
             model: args.model,
+            format: args.format,
           }).catch(handleError);
           break;
         case 'prisma':

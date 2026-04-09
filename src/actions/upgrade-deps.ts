@@ -42,6 +42,7 @@ import {
 import { fetchChangelogInfo } from '../upgrade/changelog.js';
 import { readJsonFile, writeFileAtomic } from '../fs-helpers.js';
 import { loadPromptTemplate } from '../prompt-loader.js';
+import { formatOutput, UpgradeDepsOutputSchema } from '../output/schemas.js';
 
 export interface UpgradeDepsOptions {
   dryRun?: boolean;
@@ -55,6 +56,8 @@ export interface UpgradeDepsOptions {
   provider?: string;
   /** Override LLM model (v0.2.2) */
   model?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 export async function runUpgradeDeps(options: UpgradeDepsOptions): Promise<void> {
@@ -98,6 +101,29 @@ export async function runUpgradeDeps(options: UpgradeDepsOptions): Promise<void>
 
   // 4. Render upgrade preview table
   renderUpgradeTable(filtered);
+
+  // v0.2.3: structured output
+  if (options.format === 'json' || options.format === 'ndjson') {
+    const upgrades = filtered.map((u) => ({
+      name: u.name,
+      current: u.current,
+      target: u.target,
+      risk: u.risk as 'patch' | 'minor' | 'major' | 'prerelease',
+    }));
+    process.stdout.write(
+      formatOutput(
+        {
+          version: '1' as const,
+          upgrades,
+          applied: !options.dryRun && Boolean(options.yes),
+          dryRun: Boolean(options.dryRun),
+        },
+        options.format,
+        UpgradeDepsOutputSchema,
+      ),
+    );
+    if (options.dryRun || !options.yes) return;
+  }
 
   // 5. For major upgrades, use LLM to summarize breaking changes
   const majors = filtered.filter((u) => u.risk === 'major');

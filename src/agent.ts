@@ -143,7 +143,6 @@ async function executeToolCall(
  * Sends the user request to the provider, executes tool calls, and iterates
  * until the provider signals end_turn or max_iterations is reached.
  *
- * Requirements: 9.1–9.6, 7.5, 7.6, 11.8, 11.9, 17.5, 17.6, 22.4
  */
 export async function agentLoop(
   ctx: ExecutionContext,
@@ -180,7 +179,7 @@ export async function agentLoop(
       maxTokens: config.provider.maxTokens,
     });
 
-    // Stream assistant content to terminal as it arrives (Req 22.4)
+    // Stream assistant content to terminal as it arrives
     if (response.content) {
       process.stdout.write(response.content);
       lastContent = response.content;

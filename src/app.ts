@@ -49,9 +49,9 @@ function buildDefaultConfigObject(): Record<string, unknown> {
  * Initialize the ~/.aria home directory on first run.
  *
  * Steps:
- * 1. Create ~/.aria directory if it does not exist (Requirements 1.4)
- * 2. Initialize history.db with versioned schema (Requirement 1.5)
- * 3. Set history.db file permissions to 0o600 (Requirement 23.7)
+ * 1. Create ~/.aria directory if it does not exist
+ * 2. Initialize history.db with versioned schema
+ * 3. Set history.db file permissions to 0o600
  * 4. Create default ~/.aria/config.toml if it does not exist
  */
 export function initializeAriaHome(): void {

@@ -7,6 +7,7 @@ import { parsePrismaSchema } from '../db/schema.js';
 import { renderSchemaSummary, renderModelSummary } from '../db/summary.js';
 import { initUI, info, error as uiError } from '../ui.js';
 import { getConfig } from '../config.js';
+import { formatOutput, DbSchemaOutputSchema } from '../output/schemas.js';
 import * as path from 'node:path';
 
 export interface DbSchemaOptions {
@@ -14,6 +15,8 @@ export interface DbSchemaOptions {
   prismaModel?: string;
   quiet?: boolean;
   projectRoot?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 export async function runDbSchema(options: DbSchemaOptions): Promise<void> {
@@ -27,7 +30,20 @@ export async function runDbSchema(options: DbSchemaOptions): Promise<void> {
     process.exit(5);
   }
 
-  // --json: output raw JSON
+  // v0.2.3: structured output via formatOutput
+  const effectiveFormat = options.format ?? (options.json ? 'json' : 'text');
+  if (effectiveFormat === 'json' || effectiveFormat === 'ndjson') {
+    const data = {
+      version: '1' as const,
+      models: schemaInfo.models.map((m) => ({ name: m.name, fieldCount: m.fields.length })),
+      enumCount: schemaInfo.enums?.length ?? 0,
+      datasourceProvider: schemaInfo.datasourceProvider ?? null,
+    };
+    process.stdout.write(formatOutput(data, effectiveFormat, DbSchemaOutputSchema));
+    return;
+  }
+
+  // --json: legacy output (backward compat)
   if (options.json) {
     process.stdout.write(JSON.stringify(schemaInfo, null, 2) + '\n');
     return;
@@ -47,6 +63,6 @@ export async function runDbSchema(options: DbSchemaOptions): Promise<void> {
     return;
   }
 
-  const colorEnabled = config.ui.color !== 'never';
+  const colorEnabled = config.ui.color !== 'never' && effectiveFormat !== 'plain';
   info(renderSchemaSummary(schemaInfo, colorEnabled));
 }

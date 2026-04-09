@@ -4,7 +4,6 @@
  * Provides color output, diff rendering, table rendering, confirmation prompts,
  * progress indicators, and path formatting.
  *
- * Requirements: 20.1–20.9, 11.6
  */
 
 import pc from "picocolors";
@@ -12,10 +11,6 @@ import Table from "cli-table3";
 import prompts from "prompts";
 import { createPatch } from "diff";
 import * as nodePath from "node:path";
-
-// ---------------------------------------------------------------------------
-// 13.1 Color output and quiet mode (Requirements: 20.1, 20.2, 20.3, 20.9)
-// ---------------------------------------------------------------------------
 
 /**
  * Color configuration mode
@@ -34,9 +29,8 @@ let _quietMode = false;
  *
  * - "always": colors on regardless of TTY
  * - "never": colors off regardless of TTY
- * - "auto": colors on only when stdout is a TTY (Req 20.9)
+ * - "auto": colors on only when stdout is a TTY
  *
- * Requirements: 20.2, 20.9
  */
 export function resolveColorEnabled(mode: ColorMode): boolean {
   if (mode === "always") return true;
@@ -49,7 +43,6 @@ export function resolveColorEnabled(mode: ColorMode): boolean {
  * Initialize the UI module with color mode and quiet flag.
  * Must be called once at startup before any output functions are used.
  *
- * Requirements: 20.1, 20.2, 20.3, 20.9
  */
 export function initUI(colorMode: ColorMode, quiet: boolean): void {
   _colorEnabled = resolveColorEnabled(colorMode);
@@ -124,9 +117,13 @@ export function gray(text: string): string {
   return _colorEnabled ? pc.gray(text) : text;
 }
 
-// ---------------------------------------------------------------------------
-// Output helpers — respect quiet mode (Requirement 20.3)
-// ---------------------------------------------------------------------------
+// eslint-disable-next-line no-control-regex
+const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
+
+/** Strip ANSI escape codes from a string. */
+export function stripAnsi(str: string): string {
+  return str.replace(ANSI_REGEX, '');
+}
 
 /**
  * Print a line to stdout.
@@ -140,7 +137,6 @@ export function print(message: string): void {
  * Print a line to stdout only when quiet mode is NOT active.
  * Use for non-essential informational output.
  *
- * Requirement: 20.3
  */
 export function info(message: string): void {
   if (!_quietMode) {
@@ -176,10 +172,6 @@ export function error(message: string): void {
   process.stderr.write(red("Error: ") + message + "\n");
 }
 
-// ---------------------------------------------------------------------------
-// 13.2 Diff rendering (Requirements: 11.6, 20.6)
-// ---------------------------------------------------------------------------
-
 /**
  * Colorize a single line of a unified diff.
  *
@@ -189,7 +181,6 @@ export function error(message: string): void {
  * - Lines starting with "---" / "+++" are bold (file headers)
  * - Context lines are left unstyled
  *
- * Requirement: 20.6
  */
 function colorizeDiffLine(line: string): string {
   if (!_colorEnabled) return line;
@@ -215,7 +206,6 @@ function colorizeDiffLine(line: string): string {
  * @param diffText - Unified diff text (e.g. from `createPatch`)
  * @returns Colorized diff string ready for terminal output
  *
- * Requirements: 11.6, 20.6
  */
 export function renderDiff(diffText: string): string {
   return diffText
@@ -232,7 +222,6 @@ export function renderDiff(diffText: string): string {
  * @param newContent - New file content
  * @returns Colorized unified diff string
  *
- * Requirements: 11.6, 20.6
  */
 export function generateAndRenderDiff(
   filePath: string,
@@ -249,7 +238,6 @@ export function generateAndRenderDiff(
  *
  * @param diffs - Array of { path, diff } objects
  *
- * Requirements: 11.6, 20.6
  */
 export function printDiffPreview(
   diffs: Array<{ path: string; diff: string }>
@@ -261,10 +249,6 @@ export function printDiffPreview(
     print(renderDiff(diff));
   }
 }
-
-// ---------------------------------------------------------------------------
-// 13.3 Table rendering (Requirement: 20.4)
-// ---------------------------------------------------------------------------
 
 /**
  * Options for rendering a table.
@@ -283,7 +267,6 @@ export interface TableOptions {
  * @param rows - Array of row arrays (each row is an array of cell values)
  * @returns Formatted table string ready for terminal output
  *
- * Requirement: 20.4
  */
 export function renderTable(
   options: TableOptions,
@@ -316,16 +299,11 @@ export function renderTable(
  * Print a table to stdout.
  * Suppressed in quiet mode.
  *
- * Requirement: 20.4
  */
 export function printTable(options: TableOptions, rows: string[][]): void {
   if (_quietMode) return;
   print(renderTable(options, rows));
 }
-
-// ---------------------------------------------------------------------------
-// 13.4 Confirmation prompts (Requirement: 20.5)
-// ---------------------------------------------------------------------------
 
 /**
  * Prompt the user for a yes/no confirmation using the `prompts` library.
@@ -333,7 +311,6 @@ export function printTable(options: TableOptions, rows: string[][]): void {
  * Returns `true` if the user confirms, `false` if they decline.
  * Throws `UserCancelledError` if the user cancels (Ctrl+C / SIGINT).
  *
- * Requirement: 20.5
  */
 export async function confirm(message: string): Promise<boolean> {
   const response = await prompts(
@@ -362,7 +339,6 @@ export async function confirm(message: string): Promise<boolean> {
 
 /**
  * Error thrown when the user cancels a confirmation prompt.
- * Maps to exit code 130 (Requirement 19.7).
  */
 export class ConfirmCancelledError extends Error {
   constructor() {
@@ -370,10 +346,6 @@ export class ConfirmCancelledError extends Error {
     this.name = "ConfirmCancelledError";
   }
 }
-
-// ---------------------------------------------------------------------------
-// 13.5 Progress indicators (Requirement: 20.7)
-// ---------------------------------------------------------------------------
 
 /**
  * A simple spinner / progress indicator for long-running operations.
@@ -384,7 +356,6 @@ export class ConfirmCancelledError extends Error {
  *   // ... do work ...
  *   spinner.succeed("Analysis complete");
  *
- * Requirement: 20.7
  */
 export interface Spinner {
   /** Start the spinner animation */
@@ -407,7 +378,6 @@ const SPINNER_INTERVAL_MS = 80;
  * The spinner is suppressed in quiet mode or when colors are disabled
  * (non-interactive environments).
  *
- * Requirement: 20.7
  */
 export function createSpinner(initialMessage: string): Spinner {
   let frameIndex = 0;
@@ -480,17 +450,12 @@ export function createSpinner(initialMessage: string): Spinner {
   };
 }
 
-// ---------------------------------------------------------------------------
-// 13.6 Path formatting (Requirement: 20.8)
-// ---------------------------------------------------------------------------
-
 /**
  * Format a file path relative to the project root for readable terminal output.
  *
  * If the path is already relative or cannot be made relative, it is returned
  * as-is. Absolute paths outside the project root are returned unchanged.
  *
- * Requirement: 20.8
  */
 export function formatPath(filePath: string, projectRoot: string): string {
   try {
@@ -509,7 +474,6 @@ export function formatPath(filePath: string, projectRoot: string): string {
 /**
  * Format multiple file paths relative to the project root.
  *
- * Requirement: 20.8
  */
 export function formatPaths(filePaths: string[], projectRoot: string): string[] {
   return filePaths.map((p) => formatPath(p, projectRoot));

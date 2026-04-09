@@ -19,7 +19,6 @@ export class SafetyError extends Error {
  * @param projectRoot - Absolute path to project root
  * @throws SafetyError if path is outside project root
  *
- * Requirements: 7.1, 7.3, 7.4, 8.7, 23.4
  */
 export function validatePath(inputPath: string, projectRoot: string): void {
   // Resolve the input path relative to project root
@@ -69,7 +68,6 @@ export function validatePath(inputPath: string, projectRoot: string): void {
  * @param maxFileSizeKb - Maximum file size in kilobytes
  * @throws SafetyError if file exceeds size limit
  *
- * Requirements: 7.7
  */
 export function validateFileSize(
   filePath: string,
@@ -105,7 +103,6 @@ export function validateFileSize(
  * @param maxFilesPerPatch - Maximum number of files allowed per patch
  * @throws SafetyError if patch exceeds file count limit
  *
- * Requirements: 7.8
  */
 export function validatePatchSize(
   fileCount: number,
@@ -156,7 +153,6 @@ function extractBinary(command: string): string {
  * @param allowedCommands - List of allowed binary names
  * @throws SafetyError if command is not in allowlist
  *
- * Requirements: 7.9, 23.5
  */
 export function validateShellCommand(
   command: string,

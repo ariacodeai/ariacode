@@ -1,0 +1,46 @@
+{
+  "name": "@ariacode/cli",
+  "version": "1.0.0",
+  "description": "Sample JSON fixture for syntax highlighting tests",
+  "private": false,
+  "enabled": true,
+  "count": 42,
+  "ratio": 3.14,
+  "nothing": null,
+  "tags": ["typescript", "nodejs", "cli", "agent"],
+  "config": {
+    "timeout": 5000,
+    "retries": 3,
+    "baseUrl": "https://api.example.com",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer token123"
+    }
+  },
+  "providers": [
+    {
+      "name": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "maxTokens": 8192,
+      "temperature": 0.7,
+      "enabled": true
+    },
+    {
+      "name": "openai",
+      "model": "gpt-4o",
+      "maxTokens": 4096,
+      "temperature": 0.5,
+      "enabled": false
+    }
+  ],
+  "limits": {
+    "maxFileSize": 1048576,
+    "maxFiles": 100,
+    "maxDepth": 10
+  },
+  "metadata": {
+    "createdAt": "2024-01-15T10:00:00Z",
+    "updatedAt": null,
+    "schemaVersion": 2
+  }
+}

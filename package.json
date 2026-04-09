@@ -1,6 +1,6 @@
 {
   "name": "@ariacode/cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A predictable coding agent for Next.js, Nest.js, Prisma and Node.js projects.",
   "homepage": "https://www.ariacode.run",
   "repository": {

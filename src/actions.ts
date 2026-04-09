@@ -29,6 +29,12 @@ import {
   logMessage,
   listSessions,
 } from "./storage.js";
+import type { SessionStatus } from "./storage.js";
+import {
+  searchSessions,
+  filterSessions,
+  exportSessionMarkdown,
+} from "./storage/queries.js";
 import {
   readFileTool,
   listDirectoryTool,
@@ -37,6 +43,7 @@ import {
   readPrismaSchemaTool,
   proposeDiffTool,
   applyDiffTool,
+  setDiffRenderOptions,
 } from "./tools.js";
 import { agentLoop, UserCancelledError } from "./agent.js";
 import prompts from "prompts";
@@ -51,16 +58,27 @@ import {
   dim,
   cyan,
   red,
+  stripAnsi,
   renderTable,
   generateAndRenderDiff,
   confirm,
   ConfirmCancelledError,
 } from "./ui.js";
+import { renderDiff as renderDiffEnhanced, type DiffRenderOptions } from "./ui/diff-renderer.js";
+import {
+  formatOutput,
+  AskOutputSchema,
+  PlanOutputSchema,
+  ReviewOutputSchema,
+  ExploreOutputSchema,
+  HistoryOutputSchema,
+  DoctorOutputSchema,
+} from "./output/schemas.js";
 import { loadConfig, validateConfig, type ConfigSource } from "./config.js";
 import type { Config } from "./config.js";
 import type { ExecutionContext } from "./context.js";
 import type { Tool } from "./tools.js";
-import { getShellRcPath } from "./fs-helpers.js";
+import { getShellRcPath, writeFileAtomic } from "./fs-helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -276,7 +294,6 @@ function saveProviderChoice(config: Config): void {
 
 /**
  * The five read-only tools exposed to the ask command.
- * Requirements: 9.4
  */
 const READ_ONLY_TOOLS: Tool[] = [
   readFileTool,
@@ -434,26 +451,27 @@ export interface AskOptions {
   provider?: string;
   /** Override model (v0.2.2) */
   model?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 /**
  * Execute the ask command.
  *
  * Flow:
- * 1. Load configuration and detect project type          (Req 9.1)
- * 2. Create or resume session with mode: "plan"          (Req 9.2, 9.9)
- * 3. Build system prompt from ask.md template            (Req 9.3)
- * 4. Expose only read-only tools                         (Req 9.4)
- * 5. Execute agent loop                                  (Req 9.5, 9.6)
- * 6. Render response to terminal                         (Req 9.7)
- * 7. Persist session to database                         (Req 9.8)
+ * 1. Load configuration and detect project type         
+ * 2. Create or resume session with mode: "plan"          
+ * 3. Build system prompt from ask.md template            
+ * 4. Expose only read-only tools                         
+ * 5. Execute agent loop                                  
+ * 6. Render response to terminal                         
+ * 7. Persist session to database                         
  *
- * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9
  */
 export async function runAsk(options: AskOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
-  // 1. Load configuration (Req 9.1)
+  // 1. Load configuration 
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     maxTokens: options.maxTokens,
@@ -462,19 +480,19 @@ export async function runAsk(options: AskOptions): Promise<void> {
   });
 
   // Initialize UI with config settings
-  initUI(config.ui.color, config.ui.quiet);
+  initUI(config.ui.color, config.ui.quiet || (options.format === 'json' || options.format === 'ndjson'));
 
-  // Detect project type early to fail fast if package.json is missing (Req 9.1)
+  // Detect project type early to fail fast if package.json is missing 
   detectProjectType(projectRoot);
 
-  // 2. Initialize database and create/resume session (Req 9.2, 9.8, 9.9)
+  // 2. Initialize database and create/resume session 
   const db = initializeDatabase();
 
   let sessionId: string;
   let resumedMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
 
   if (options.session) {
-    // Resume existing session (Req 9.9)
+    // Resume existing session 
     const existing = getSession(db, options.session);
     if (!existing) {
       uiError(`Session not found: ${options.session}`);
@@ -491,7 +509,7 @@ export async function runAsk(options: AskOptions): Promise<void> {
       .all(sessionId) as Array<{ role: "user" | "assistant" | "system"; content: string }>;
     resumedMessages = rows;
   } else {
-    // Create new session (Req 9.2)
+    // Create new session 
     sessionId = randomUUID();
     createSession(db, {
       id: sessionId,
@@ -517,7 +535,7 @@ export async function runAsk(options: AskOptions): Promise<void> {
     process.exit(4);
   }
 
-  // 4. Build execution context with mode: "plan" (Req 9.2)
+  // 4. Build execution context with mode: "plan" 
   const ctx: ExecutionContext = {
     projectRoot,
     sessionId,
@@ -535,7 +553,7 @@ export async function runAsk(options: AskOptions): Promise<void> {
     config.provider.maxTokens = options.maxTokens;
   }
 
-  // 5. Build system prompt from ask.md template (Req 9.3)
+  // 5. Build system prompt from ask.md template 
   const systemPrompt = buildSystemPrompt("ask", ctx);
 
   // Log system prompt as a system message
@@ -556,10 +574,10 @@ export async function runAsk(options: AskOptions): Promise<void> {
     userRequest = `[Resumed session context]\n${priorContext}\n\n[New question]: ${options.question}`;
   }
 
-  // 6. Execute agent loop (Req 9.5, 9.6)
-  // agentLoop streams the response to stdout as it arrives (Req 9.7)
+  // 6. Execute agent loop 
+  // agentLoop streams the response to stdout as it arrives 
   try {
-    await agentLoop(
+    const answer = await agentLoop(
       ctx,
       userRequest,
       READ_ONLY_TOOLS,
@@ -570,16 +588,41 @@ export async function runAsk(options: AskOptions): Promise<void> {
       systemPrompt
     );
 
-    // 7. Mark session as completed (Req 9.8)
+    // v0.2.3: structured output
+    if (options.format === 'json' || options.format === 'ndjson') {
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, answer, sessionId },
+          options.format,
+          AskOutputSchema,
+        ),
+      );
+    } else if (options.format === 'plain') {
+      // Strip ANSI codes and write plain text
+      process.stdout.write(stripAnsi(answer) + '\n');
+    }
+
+    // 7. Mark session as completed
     updateSessionStatus(db, sessionId, "completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    // v0.2.3: structured error output
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    }
+
     uiError(message);
     updateSessionStatus(db, sessionId, "failed", message);
     process.exit(1);
   }
 }
-
 // ---------------------------------------------------------------------------
 // plan command
 // ---------------------------------------------------------------------------
@@ -602,27 +645,28 @@ export interface PlanOptions {
   provider?: string;
   /** Override model (v0.2.2) */
   model?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 /**
  * Execute the plan command.
  *
  * Flow:
- * 1. Load configuration and detect project type          (Req 10.1)
- * 2. Create or resume session with mode: "plan"          (Req 10.2, 10.8)
- * 3. Build system prompt from plan.md template           (Req 10.3)
- * 4. Expose only read-only tools                         (Req 10.4)
- * 5. Execute agent loop                                  (Req 10.5)
- * 6. Render structured plan to terminal                  (Req 10.6)
- * 7. Save to file if --output flag provided              (Req 10.7)
- * 8. Persist session to database                         (Req 10.8)
+ * 1. Load configuration and detect project type          
+ * 2. Create or resume session with mode: "plan"          
+ * 3. Build system prompt from plan.md template           
+ * 4. Expose only read-only tools                         
+ * 5. Execute agent loop                                  
+ * 6. Render structured plan to terminal                  
+ * 7. Save to file if --output flag provided              
+ * 8. Persist session to database                         
  *
- * Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8
  */
 export async function runPlan(options: PlanOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
-  // 1. Load configuration (Req 10.1)
+  // 1. Load configuration 
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     provider: options.provider,
@@ -630,19 +674,19 @@ export async function runPlan(options: PlanOptions): Promise<void> {
   });
 
   // Initialize UI with config settings
-  initUI(config.ui.color, config.ui.quiet);
+  initUI(config.ui.color, config.ui.quiet || (options.format === 'json' || options.format === 'ndjson'));
 
-  // Detect project type early to fail fast if package.json is missing (Req 10.1)
+  // Detect project type early to fail fast if package.json is missing 
   detectProjectType(projectRoot);
 
-  // 2. Initialize database and create/resume session (Req 10.2, 10.8)
+  // 2. Initialize database and create/resume session 
   const db = initializeDatabase();
 
   let sessionId: string;
   let resumedMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
 
   if (options.session) {
-    // Resume existing session (Req 10.8)
+    // Resume existing session 
     const existing = getSession(db, options.session);
     if (!existing) {
       uiError(`Session not found: ${options.session}`);
@@ -659,7 +703,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
       .all(sessionId) as Array<{ role: "user" | "assistant" | "system"; content: string }>;
     resumedMessages = rows;
   } else {
-    // Create new session (Req 10.2)
+    // Create new session 
     sessionId = randomUUID();
     createSession(db, {
       id: sessionId,
@@ -685,7 +729,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
     process.exit(4);
   }
 
-  // 4. Build execution context with mode: "plan" (Req 10.2)
+  // 4. Build execution context with mode: "plan" 
   const ctx: ExecutionContext = {
     projectRoot,
     sessionId,
@@ -698,7 +742,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
     timeoutSeconds: config.agent.timeoutSeconds,
   };
 
-  // 5. Build system prompt from plan.md template (Req 10.3)
+  // 5. Build system prompt from plan.md template 
   const systemPrompt = buildSystemPrompt("plan", ctx, { userGoal: options.goal });
 
   // Log system prompt as a system message
@@ -716,7 +760,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
     userRequest = `[Resumed session context]\n${priorContext}\n\n[New goal]: ${options.goal}`;
   }
 
-  // 6. Execute agent loop — streams response to stdout (Req 10.5, 10.6)
+  // 6. Execute agent loop — streams response to stdout 
   try {
     const planContent = await agentLoop(
       ctx,
@@ -729,7 +773,18 @@ export async function runPlan(options: PlanOptions): Promise<void> {
       systemPrompt
     );
 
-    // 7. Save to file if --output flag provided (Req 10.7)
+    // v0.2.3: structured output 
+    if (options.format === 'json' || options.format === 'ndjson') {
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, plan: planContent, sessionId, outputPath: options.output },
+          options.format,
+          PlanOutputSchema,
+        ),
+      );
+    }
+
+    // 7. Save to file if --output flag provided
     if (options.output) {
       const outputPath = path.resolve(options.output);
       const outputDir = path.dirname(outputPath);
@@ -738,7 +793,7 @@ export async function runPlan(options: PlanOptions): Promise<void> {
         mkdirSync(outputDir, { recursive: true });
       }
 
-      writeFileSync(outputPath, planContent, "utf-8");
+      writeFileAtomic(outputPath, planContent);
       info(`Plan saved to ${options.output}`);
     }
 
@@ -746,6 +801,18 @@ export async function runPlan(options: PlanOptions): Promise<void> {
     updateSessionStatus(db, sessionId, "completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    // v0.2.3: structured error output 
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    }
+
     uiError(message);
     updateSessionStatus(db, sessionId, "failed", message);
     process.exit(1);
@@ -776,32 +843,35 @@ export interface PatchOptions {
   provider?: string;
   /** Override model (v0.2.2) */
   model?: string;
+  /** Render diff in side-by-side layout when terminal is wide enough */
+  split?: boolean;
+  /** Output format */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 /**
  * Execute the patch command.
  *
  * Flow:
- * 1. Load configuration and detect project type          (Req 11.1)
- * 2. Create session with mode: "build"                   (Req 11.2)
- * 3. Build system prompt from patch.md template          (Req 11.3)
- * 4. Expose read-only + mutation tools                   (Req 11.4)
- * 5. Execute agent loop — agent calls propose_diff       (Req 11.4, 11.5)
- * 6. Render diff preview with syntax highlighting        (Req 11.6)
- * 7. Render mutation summary                             (Req 11.7)
- * 8. If --dry-run, exit with code 0                      (Req 11.8, 17.3, 17.4)
- * 9. If not --yes, prompt for confirmation               (Req 11.9, 17.5)
- * 10. Agent calls apply_diff atomically                  (Req 11.10, 11.11, 11.12)
- * 11. Log mutation to database                           (Req 11.11)
- * 12. Display rollback hints                             (Req 11.12, 17.9)
- * 13. Persist session to database                        (Req 11.13)
+ * 1. Load configuration and detect project type          
+ * 2. Create session with mode: "build"                   
+ * 3. Build system prompt from patch.md template          
+ * 4. Expose read-only + mutation tools                   
+ * 5. Execute agent loop — agent calls propose_diff       
+ * 6. Render diff preview with syntax highlighting        
+ * 7. Render mutation summary                             
+ * 8. If --dry-run, exit with code 0                      
+ * 9. If not --yes, prompt for confirmation               
+ * 10. Agent calls apply_diff atomically                  
+ * 11. Log mutation to database                          
+ * 12. Display rollback hints                             
+ * 13. Persist session to database                        
  *
- * Requirements: 11.1–11.13, 17.1–17.9
  */
 export async function runPatch(options: PatchOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
-  // 1. Load configuration (Req 11.1)
+  // 1. Load configuration 
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     provider: options.provider,
@@ -814,10 +884,16 @@ export async function runPatch(options: PatchOptions): Promise<void> {
   // Initialize UI with config settings
   initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
 
-  // Detect project type early to fail fast (Req 11.1)
+  // Plain format guard: require --yes for mutation commands 
+  if (options.format === 'plain' && !options.yes) {
+    process.stdout.write('plain format requires --yes for mutation commands\n');
+    process.exit(2);
+  }
+
+  // Detect project type early to fail fast 
   detectProjectType(projectRoot);
 
-  // 2. Initialize database and create session (Req 11.13)
+  // 2. Initialize database and create session 
   const db = initializeDatabase();
 
   let sessionId: string;
@@ -856,7 +932,7 @@ export async function runPatch(options: PatchOptions): Promise<void> {
     process.exit(4);
   }
 
-  // 4. Build execution context with mode: "build" (Req 11.2, 17.1, 17.2)
+  // 4. Build execution context with mode: "build" 
   const ctx: ExecutionContext = {
     projectRoot,
     sessionId,
@@ -869,11 +945,11 @@ export async function runPatch(options: PatchOptions): Promise<void> {
     timeoutSeconds: config.agent.timeoutSeconds,
   };
 
-  // 5. Build system prompt from patch.md template (Req 11.3)
+  // 5. Build system prompt from patch.md template 
   const systemPrompt = buildSystemPrompt("patch", ctx);
   logMessage(db, sessionId, "system", systemPrompt);
 
-  // Expose read-only tools + mutation tools (Req 11.4)
+  // Expose read-only tools + mutation tools
   const patchTools: Tool[] = [
     readFileTool,
     listDirectoryTool,
@@ -888,12 +964,23 @@ export async function runPatch(options: PatchOptions): Promise<void> {
     info(bold("Dry-run mode — changes will be previewed but not applied."));
   }
 
-  // 6. Execute agent loop (Req 11.4, 11.5, 11.6, 11.7, 11.8, 11.9, 11.10)
+  // Configure enhanced diff renderer
+  const terminalWidth = process.stdout.columns ?? 80;
+  const diffRenderOptions: DiffRenderOptions = {
+    split: options.split ?? false,
+    lineNumbers: options.format !== 'plain',
+    collapseThreshold: 5,
+    terminalWidth,
+    ...(options.format === 'plain' ? { language: undefined } : {}),
+  };
+  setDiffRenderOptions((diffText: string) => renderDiffEnhanced(diffText, diffRenderOptions));
+
+  // 6. Execute agent loop 
   // The agent loop handles:
-  //   - propose_diff: generates diff + MutationSummary (Req 11.4, 11.5)
-  //   - dry-run enforcement: skips apply_diff (Req 11.8, 17.3, 17.4)
-  //   - confirmation prompt before apply_diff (Req 11.9, 17.5, 17.6)
-  //   - atomic application via apply_diff (Req 11.10, 11.11, 11.12)
+  //   - propose_diff: generates diff + MutationSummary
+  //   - dry-run enforcement: skips apply_diff
+  //   - confirmation prompt before apply_diff 
+  //   - atomic application via apply_diff 
   try {
     await agentLoop(
       ctx,
@@ -906,7 +993,7 @@ export async function runPatch(options: PatchOptions): Promise<void> {
       systemPrompt
     );
 
-    // 12. Display rollback hints after successful application (Req 11.12, 17.9)
+    // 12. Display rollback hints after successful application
     // The agent loop streams the response which includes rollback hints from
     // the apply_diff result. We add a final summary line here.
     if (!options.dryRun) {
@@ -918,12 +1005,12 @@ export async function runPatch(options: PatchOptions): Promise<void> {
       info(yellow("Dry-run complete — no files were modified."));
     }
 
-    // 13. Mark session as completed (Req 11.13)
+    // 13. Mark session as completed
     updateSessionStatus(db, sessionId, "completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
-    // Handle user cancellation (Req 17.6, exit code 130)
+    // Handle user cancellation
     if (err instanceof UserCancelledError || err instanceof ConfirmCancelledError) {
       info("");
       info(yellow("Operation cancelled."));
@@ -931,9 +1018,23 @@ export async function runPatch(options: PatchOptions): Promise<void> {
       process.exit(130);
     }
 
+    // v0.2.3: structured error output
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, "failed", message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, "failed", message);
+      process.exit(1);
+    }
+
     uiError(message);
     updateSessionStatus(db, sessionId, "failed", message);
     process.exit(1);
+  } finally {
+    // Clear diff render options after patch completes
+    setDiffRenderOptions(null);
   }
 }
 
@@ -949,8 +1050,8 @@ export interface ReviewOptions {
   unstaged?: boolean;
   /** Compare current branch to specified base branch */
   branch?: string;
-  /** Output format: "text" (default) or "json" */
-  format?: "text" | "json";
+  /** Output format */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
   /** Suppress non-essential output */
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
@@ -977,20 +1078,19 @@ export interface ReviewResult {
  * - --unstaged: unstaged changes (`git diff`)
  * - --branch <base>: compare to base branch (`git diff <base>...HEAD`)
  *
- * Requirements: 12.3, 12.4, 12.5
  */
 function readGitDiff(options: ReviewOptions, projectRoot: string): string {
   try {
     let args: string[];
 
     if (options.branch) {
-      // Compare current branch to specified base (Req 12.5)
+      // Compare current branch to specified base 
       args = ["diff", `${options.branch}...HEAD`];
     } else if (options.unstaged) {
-      // Unstaged changes (Req 12.4)
+      // Unstaged changes 
       args = ["diff"];
     } else {
-      // Staged changes — default (Req 12.3)
+      // Staged changes — default 
       args = ["diff", "--cached"];
     }
 
@@ -1014,7 +1114,6 @@ function readGitDiff(options: ReviewOptions, projectRoot: string): string {
  * Extracts summary, issues (with severity), and suggestions from the
  * "# Code Review" markdown format defined in review.md.
  *
- * Requirements: 12.7
  */
 function parseReviewResponse(content: string): ReviewResult {
   const result: ReviewResult = {
@@ -1069,7 +1168,6 @@ function parseReviewResponse(content: string): ReviewResult {
 /**
  * Render the structured review to the terminal in readable format.
  *
- * Requirements: 12.8
  */
 function renderReview(review: ReviewResult): void {
   info("");
@@ -1111,23 +1209,22 @@ function renderReview(review: ReviewResult): void {
  * Execute the review command.
  *
  * Flow:
- * 1. Parse flags and load configuration                  (Req 12.1)
- * 2. Detect project type                                 (Req 12.1)
- * 3. Create session with mode: "plan"                    (Req 12.2)
- * 4. Read git diff (staged / unstaged / branch)          (Req 12.3, 12.4, 12.5)
- * 5. Build system prompt from review.md template         (Req 12.6)
- * 6. Send diff + project context to provider             (Req 12.6)
- * 7. Parse structured review (summary, issues, suggestions) (Req 12.7)
- * 8. Render review to terminal                           (Req 12.8)
- * 9. Output JSON if --format json                        (Req 12.9)
- * 10. Persist session to database                        (Req 12.10)
+ * 1. Parse flags and load configuration                  
+ * 2. Detect project type                                 
+ * 3. Create session with mode: "plan"                    
+ * 4. Read git diff (staged / unstaged / branch)          
+ * 5. Build system prompt from review.md template         
+ * 6. Send diff + project context to provider             
+ * 7. Parse structured review (summary, issues, suggestions) 
+ * 8. Render review to terminal                           
+ * 9. Output JSON if --format json                        
+ * 10. Persist session to database                        
  *
- * Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9, 12.10
  */
 export async function runReview(options: ReviewOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
-  // 1. Load configuration (Req 12.1)
+  // 1. Load configuration 
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     provider: options.provider,
@@ -1135,12 +1232,12 @@ export async function runReview(options: ReviewOptions): Promise<void> {
   });
 
   // Initialize UI with config settings
-  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
+  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet) || (options.format === 'json' || options.format === 'ndjson'));
 
-  // 2. Detect project type early to fail fast (Req 12.1)
+  // 2. Detect project type early to fail fast 
   detectProjectType(projectRoot);
 
-  // 3. Initialize database and create session (Req 12.10)
+  // 3. Initialize database and create session 
   const db = initializeDatabase();
   const sessionId = randomUUID();
 
@@ -1167,7 +1264,7 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     process.exit(4);
   }
 
-  // Build execution context with mode: "plan" (Req 12.2)
+  // Build execution context with mode: "plan" 
   const ctx: ExecutionContext = {
     projectRoot,
     sessionId,
@@ -1180,7 +1277,7 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     timeoutSeconds: config.agent.timeoutSeconds,
   };
 
-  // 4. Read git diff (Req 12.3, 12.4, 12.5)
+  // 4. Read git diff 
   let diff: string;
   try {
     diff = readGitDiff(options, projectRoot);
@@ -1202,11 +1299,11 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     return;
   }
 
-  // 5. Build system prompt from review.md template (Req 12.6)
+  // 5. Build system prompt from review.md template 
   const systemPrompt = buildSystemPrompt("review", ctx);
   logMessage(db, sessionId, "system", systemPrompt);
 
-  // 6. Build user request: diff + project context (Req 12.6)
+  // 6. Build user request: diff + project context 
   const project = detectProjectType(projectRoot);
   const diffSource = options.branch
     ? `branch diff (current vs ${options.branch})`
@@ -1228,7 +1325,7 @@ export async function runReview(options: ReviewOptions): Promise<void> {
     .filter((l) => l !== null)
     .join("\n");
 
-  // Execute agent loop — streams response to stdout (Req 12.6, 12.7, 12.8)
+  // Execute agent loop — streams response to stdout 
   try {
     const reviewContent = await agentLoop(
       ctx,
@@ -1241,21 +1338,31 @@ export async function runReview(options: ReviewOptions): Promise<void> {
       systemPrompt
     );
 
-    // 7. Parse structured review (Req 12.7)
+    // 7. Parse structured review 
     const review = parseReviewResponse(reviewContent);
 
-    // 8 & 9. Render or output JSON (Req 12.8, 12.9)
-    if (options.format === "json") {
-      // JSON output to stdout (Req 12.9)
-      process.stdout.write(JSON.stringify(review, null, 2) + "\n");
+    // 8 & 9. Render or output 
+    if (options.format === 'json' || options.format === 'ndjson') {
+      // v0.2.3: structured output via formatOutput
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, review: reviewContent, sessionId, branch: options.branch },
+          options.format,
+          ReviewOutputSchema,
+        ),
+      );
+    } else if (options.format === 'plain') {
+      // Strip ANSI codes for plain output
+      const plainReview = stripAnsi(reviewContent);
+      process.stdout.write(plainReview + '\n');
     } else {
-      // Render to terminal in readable format (Req 12.8)
+      // Render to terminal in readable format 
       // Note: agentLoop already streamed the raw response; renderReview
       // provides a structured re-render for clarity.
       renderReview(review);
     }
 
-    // 10. Mark session as completed (Req 12.10)
+    // 10. Mark session as completed 
     updateSessionStatus(db, sessionId, "completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1266,6 +1373,17 @@ export async function runReview(options: ReviewOptions): Promise<void> {
       info(yellow("Operation cancelled."));
       updateSessionStatus(db, sessionId, "cancelled");
       process.exit(130);
+    }
+
+    // v0.2.3: structured error output 
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
     }
 
     uiError(message);
@@ -1294,30 +1412,31 @@ export interface ExploreOptions {
   provider?: string;
   /** Override model (v0.2.2) */
   model?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 /**
  * Execute the explore command.
  *
  * Flow:
- * 1. Parse flags and load configuration                  (Req 13.1)
- * 2. Detect project type                                 (Req 13.1)
- * 3. Create session with mode: "plan"                    (Req 13.2)
- * 4. Scan repository structure respecting .gitignore     (Req 13.3)
- * 5. Detect frameworks and key configuration files       (Req 13.4)
- * 6. Identify entry points based on project type         (Req 13.5)
- * 7. Build system prompt from explore.md template        (Req 13.3–13.6)
- * 8. Execute agent loop to summarize structure/patterns  (Req 13.6)
- * 9. Render exploration summary to terminal              (Req 13.7)
- * 10. Save to ./.aria/explore.md if --save flag          (Req 13.8)
- * 11. Persist session to database                        (Req 13.10)
+ * 1. Parse flags and load configuration                  
+ * 2. Detect project type                                 
+ * 3. Create session with mode: "plan"                    
+ * 4. Scan repository structure respecting .gitignore     
+ * 5. Detect frameworks and key configuration files       
+ * 6. Identify entry points based on project type         
+ * 7. Build system prompt from explore.md template        
+ * 8. Execute agent loop to summarize structure/patterns  
+ * 9. Render exploration summary to terminal              
+ * 10. Save to ./.aria/explore.md if --save flag          
+ * 11. Persist session to database                        
  *
- * Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9, 13.10
  */
 export async function runExplore(options: ExploreOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
-  // 1. Load configuration (Req 13.1)
+  // 1. Load configuration 
   const config = getConfig(projectRoot, {
     quiet: options.quiet,
     provider: options.provider,
@@ -1325,12 +1444,12 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
   });
 
   // Initialize UI with config settings
-  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
+  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet) || (options.format === 'json' || options.format === 'ndjson'));
 
-  // Detect project type early to fail fast (Req 13.1)
+  // Detect project type early to fail fast 
   const project = detectProjectType(projectRoot);
 
-  // 2. Initialize database and create session (Req 13.10)
+  // 2. Initialize database and create session 
   const db = initializeDatabase();
   const sessionId = randomUUID();
 
@@ -1357,7 +1476,7 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
     process.exit(4);
   }
 
-  // 4. Build execution context with mode: "plan" (Req 13.2)
+  // 4. Build execution context with mode: "plan" 
   const ctx: ExecutionContext = {
     projectRoot,
     sessionId,
@@ -1370,11 +1489,11 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
     timeoutSeconds: config.agent.timeoutSeconds,
   };
 
-  // 5. Build system prompt from explore.md template (Req 13.3–13.6)
+  // 5. Build system prompt from explore.md template 
   const systemPrompt = buildSystemPrompt("explore", ctx);
   logMessage(db, sessionId, "system", systemPrompt);
 
-  // 6. Build user request with project context and depth hint (Req 13.9)
+  // 6. Build user request with project context and depth hint 
   const frameworkInfo = project.framework
     ? `${project.framework.name}${project.framework.version ? ` ${project.framework.version}` : ""}${project.framework.router ? ` (${project.framework.router} router)` : ""}`
     : "none";
@@ -1401,7 +1520,7 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
     .filter((l) => l !== null)
     .join("\n");
 
-  // 7. Execute agent loop — streams response to stdout (Req 13.6, 13.7)
+  // 7. Execute agent loop — streams response to stdout 
   try {
     const exploreContent = await agentLoop(
       ctx,
@@ -1414,7 +1533,18 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
       systemPrompt
     );
 
-    // 8. Save to ./.aria/explore.md if --save flag provided (Req 13.8)
+    // v0.2.3: structured output 
+    if (options.format === 'json' || options.format === 'ndjson') {
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, summary: exploreContent, sessionId },
+          options.format,
+          ExploreOutputSchema,
+        ),
+      );
+    }
+
+    // 8. Save to ./.aria/explore.md if --save flag provided 
     if (options.save) {
       const ariaDir = path.join(projectRoot, ".aria");
       const savePath = path.join(ariaDir, "explore.md");
@@ -1423,11 +1553,11 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
         mkdirSync(ariaDir, { recursive: true });
       }
 
-      writeFileSync(savePath, exploreContent, "utf-8");
+      writeFileAtomic(savePath, exploreContent);
       info(`Exploration summary saved to .aria/explore.md`);
     }
 
-    // 9. Mark session as completed (Req 13.10)
+    // 9. Mark session as completed 
     updateSessionStatus(db, sessionId, "completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1437,6 +1567,17 @@ export async function runExplore(options: ExploreOptions): Promise<void> {
       info(yellow("Operation cancelled."));
       updateSessionStatus(db, sessionId, "cancelled");
       process.exit(130);
+    }
+
+    // v0.2.3: structured error output 
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
     }
 
     uiError(message);
@@ -1463,13 +1604,24 @@ export interface HistoryOptions {
   quiet?: boolean;
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
+  /** Full-text search query across session content  */
+  search?: string;
+  /** Filter by command name  */
+  command?: string;
+  /** Filter by date expression, e.g. "3 days ago"  */
+  since?: string;
+  /** Filter by session status */
+  status?: SessionStatus;
+  /** Export session transcript to markdown file at this path */
+  export?: string;
+  /** Output format */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 /**
  * Format a SQLite timestamp string into a human-readable relative time.
  * e.g. "2 hours ago", "3 days ago", "just now"
  *
- * Requirements: 14.7
  */
 function formatTimestamp(timestamp: string): string {
   // SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" (space, no T, no Z).
@@ -1523,8 +1675,20 @@ function colorizeStatus(status: string): string {
  * Render a tool execution tree for a session.
  * Shows tool calls in chronological order with input/output summaries.
  *
- * Requirements: 14.6
  */
+
+// Tool type icon sets 
+const READ_TOOLS = new Set(['read_file', 'read_package_json', 'read_prisma_schema']);
+const SEARCH_TOOLS = new Set(['search_code', 'list_directory']);
+const MUTATION_TOOLS = new Set(['propose_diff', 'apply_diff', 'apply_schema_change']);
+
+function toolIcon(toolName: string): string {
+  if (READ_TOOLS.has(toolName)) return '[R]';
+  if (SEARCH_TOOLS.has(toolName)) return '[S]';
+  if (MUTATION_TOOLS.has(toolName)) return '[W]';
+  return '[.]';
+}
+
 function renderToolTree(
   db: import("better-sqlite3").Database,
   sessionId: string
@@ -1556,7 +1720,8 @@ function renderToolTree(
     const childPrefix = isLast ? "   " : "│  ";
 
     const statusIcon = exec.error ? red("✗") : green("✓");
-    info(`  ${prefix} ${statusIcon} ${bold(exec.tool_name)} ${dim(formatTimestamp(exec.created_at))}`);
+    const typeIcon = toolIcon(exec.tool_name);
+    info(`  ${prefix} ${typeIcon} ${statusIcon} ${bold(exec.tool_name)} ${dim(formatTimestamp(exec.created_at))}`);
 
     // Show a brief summary of the input
     try {
@@ -1589,26 +1754,100 @@ function renderToolTree(
  * Execute the history command.
  *
  * Flow:
- * 1. If no --session flag: list recent sessions in a table  (Req 14.2, 14.3, 14.4)
- * 2. If --session flag: display full session log            (Req 14.5)
- * 3. If --tree flag: render tool execution tree             (Req 14.6)
- * 4. Format timestamps in human-readable format             (Req 14.7)
- * 5. Support pagination for large result sets               (Req 14.8)
+ * 1. If no --session flag: list recent sessions in a table  
+ * 2. If --session flag: display full session log            
+ * 3. If --tree flag: render tool execution tree             
+ * 4. Format timestamps in human-readable format            
+ * 5. Support pagination for large result sets               
  *
- * Requirements: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7, 14.8
  */
 export async function runHistory(options: HistoryOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
 
   // Load configuration and initialize UI
   const config = getConfig(projectRoot, { quiet: options.quiet });
-  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
+  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet) || (options.format === 'json' || options.format === 'ndjson'));
 
   // Initialize database
   const db = initializeDatabase();
 
   // ---------------------------------------------------------------------------
-  // Case 1: --session flag — show full session log (Req 14.5)
+  // v0.2.3: Structured output for json/ndjson/plain — applies to session listing
+  // ---------------------------------------------------------------------------
+  const isStructuredFormat = options.format === 'json' || options.format === 'ndjson';
+  const isPlainFormat = options.format === 'plain';
+
+  // ---------------------------------------------------------------------------
+  // v0.2.3: Search path — full-text search across session content 
+  // ---------------------------------------------------------------------------
+  if (options.search) {
+    const results = searchSessions(db, options.search, { limit: options.limit });
+    if (results.length === 0) {
+      info("No sessions found matching query.");
+      return;
+    }
+    const rows: string[][] = results.map(({ session, matchedInMessages }) => [
+      dim(session.id.slice(0, 8)),
+      cyan(session.command),
+      colorizeStatus(session.status),
+      formatTimestamp(session.createdAt),
+      matchedInMessages ? dim("message") : dim("metadata"),
+    ]);
+    const table = renderTable(
+      { head: ["ID", "Command", "Status", "Started", "Match"], colWidths: [12, 12, 12, 20, 12] },
+      rows,
+    );
+    info(table);
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // v0.2.3: Filter path — filter by command, since, status 
+  // ---------------------------------------------------------------------------
+  if (options.command || options.since || options.status) {
+    const sessions = filterSessions(db, {
+      command: options.command,
+      since: options.since,
+      status: options.status,
+      limit: options.limit,
+    });
+    if (sessions.length === 0) {
+      info("No sessions found.");
+      return;
+    }
+    const rows: string[][] = sessions.map((s) => [
+      dim(s.id.slice(0, 8)),
+      cyan(s.command),
+      formatTimestamp(s.createdAt),
+      colorizeStatus(s.status),
+    ]);
+    const table = renderTable(
+      { head: ["ID", "Command", "When", "Status"], colWidths: [12, 12, 20, 12] },
+      rows,
+    );
+    info(table);
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // v0.2.3: Export path — export session transcript to markdown 
+  // ---------------------------------------------------------------------------
+  if (options.export && options.session) {
+    // Validate export path is within project root to prevent path traversal
+    try {
+      const { validatePath } = await import('./safety.js');
+      validatePath(path.resolve(options.export), projectRoot);
+    } catch {
+      uiError(`Export path must be within the project root: ${options.export}`);
+      process.exit(2);
+    }
+    exportSessionMarkdown(db, options.session, options.export);
+    info(`Session exported to ${path.resolve(options.export)}`);
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Case 1: --session flag — show full session log 
   // ---------------------------------------------------------------------------
   if (options.session) {
     const session = getSession(db, options.session);
@@ -1684,7 +1923,7 @@ export async function runHistory(options: HistoryOptions): Promise<void> {
       info(bold(`Tool Executions (${toolCount}):`));
 
       if (options.tree) {
-        // Render as tree (Req 14.6)
+        // Render as tree 
         renderToolTree(db, options.session);
       } else {
         // Render as flat list
@@ -1715,28 +1954,67 @@ export async function runHistory(options: HistoryOptions): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // Case 2: No --session flag — list recent sessions (Req 14.2, 14.3, 14.4)
+  // Case 2: No --session flag — list recent sessions 
   // ---------------------------------------------------------------------------
   const PAGE_SIZE = 20;
   const limit = options.limit ?? PAGE_SIZE;
 
-  // Fetch sessions with pagination support (Req 14.8)
+  // Fetch sessions with pagination support
   const sessions = listSessions(db, { limit });
 
   if (sessions.length === 0) {
-    info("No sessions found. Run a command to create your first session.");
+    if (!isStructuredFormat) {
+      info("No sessions found. Run a command to create your first session.");
+    }
+    if (isStructuredFormat) {
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, sessions: [], total: 0 },
+          options.format as 'json' | 'ndjson',
+          HistoryOutputSchema,
+        ),
+      );
+    }
     return;
   }
 
-  // Build table rows (Req 14.3)
+  // v0.2.3: structured output 
+  if (isStructuredFormat) {
+    const outputSessions = sessions.map((s) => ({
+      id: s.id,
+      command: s.command,
+      status: s.status,
+      createdAt: s.createdAt,
+      completedAt: s.completedAt ?? null,
+    }));
+    process.stdout.write(
+      formatOutput(
+        { version: '1' as const, sessions: outputSessions, total: sessions.length },
+        options.format as 'json' | 'ndjson',
+        HistoryOutputSchema,
+      ),
+    );
+    return;
+  }
+
+  // v0.2.3: plain format — tab-separated, no cli-table3 borders
+  if (isPlainFormat) {
+    process.stdout.write('ID\tCommand\tWhen\tStatus\n');
+    for (const s of sessions) {
+      process.stdout.write(`${s.id.slice(0, 8)}\t${s.command}\t${s.createdAt}\t${s.status}\n`);
+    }
+    return;
+  }
+
+  // Build table rows 
   const rows: string[][] = sessions.map((s) => [
     dim(s.id.slice(0, 8)),          // abbreviated ID
     cyan(s.command),
-    formatTimestamp(s.createdAt),   // human-readable timestamp (Req 14.7)
+    formatTimestamp(s.createdAt),   // human-readable timestamp 
     colorizeStatus(s.status),
   ]);
 
-  // Render table with cli-table3 (Req 14.3, 20.4)
+  // Render table with cli-table3 
   const table = renderTable(
     {
       head: ["ID", "Command", "When", "Status"],
@@ -1747,7 +2025,7 @@ export async function runHistory(options: HistoryOptions): Promise<void> {
 
   info(table);
 
-  // Show pagination hint if there may be more results (Req 14.8)
+  // Show pagination hint if there may be more results 
   if (sessions.length === limit && !options.limit) {
     info(dim(`\nShowing ${limit} most recent sessions. Use --limit <n> to see more.`));
   }
@@ -1872,7 +2150,6 @@ function parseConfigValue(value: string): unknown {
 
 /**
  * Display the effective configuration with precedence sources.
- * Requirements: 15.2
  */
 function displayEffectiveConfig(
   projectRoot: string,
@@ -1923,13 +2200,12 @@ function displayEffectiveConfig(
  * Execute the config command.
  *
  * Subcommands:
- * - (none): Display effective configuration with precedence sources  (Req 15.2)
- * - get <key>: Display value for specified key                       (Req 15.3)
- * - set <key> <value>: Write key-value to ~/.aria/config.toml        (Req 15.4–15.6, 15.10)
- * - path: Display configuration file resolution paths               (Req 15.7)
- * - init: Create ./.aria.toml with default values                   (Req 15.8, 15.9)
+ * - (none): Display effective configuration with precedence sources  
+ * - get <key>: Display value for specified key                       
+ * - set <key> <value>: Write key-value to ~/.aria/config.toml        
+ * - path: Display configuration file resolution paths               
+ * - init: Create ./.aria.toml with default values                   
  *
- * Requirements: 15.1–15.10
  */
 export async function runConfig(options: ConfigOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
@@ -1942,7 +2218,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
   const projectConfigPath = path.join(projectRoot, ".aria.toml");
 
   // ---------------------------------------------------------------------------
-  // No subcommand: display effective configuration (Req 15.2)
+  // No subcommand: display effective configuration 
   // ---------------------------------------------------------------------------
   if (!options.subcommand) {
     displayEffectiveConfig(projectRoot, config);
@@ -1950,7 +2226,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // config path: display config file resolution paths (Req 15.7)
+  // config path: display config file resolution paths 
   // ---------------------------------------------------------------------------
   if (options.subcommand === "path") {
     info(bold("Configuration file paths:"));
@@ -1964,7 +2240,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // config get <key>: display value for key (Req 15.3)
+  // config get <key>: display value for key 
   // ---------------------------------------------------------------------------
   if (options.subcommand === "get") {
     const key = options.key!;
@@ -1978,7 +2254,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // config set <key> <value>: write to user config (Req 15.4–15.6, 15.10)
+  // config set <key> <value>: write to user config
   // ---------------------------------------------------------------------------
   if (options.subcommand === "set") {
     const key = options.key!;
@@ -1987,7 +2263,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
     // Parse the value to the appropriate type
     const parsedValue = parseConfigValue(rawValue);
 
-    // Validate by applying to current config and re-validating (Req 15.10)
+    // Validate by applying to current config and re-validating 
     const currentMerged = loadConfig(projectRoot);
     const updatedMerged = setNestedValue(
       currentMerged as Record<string, unknown>,
@@ -2011,18 +2287,18 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
       : "";
     const newContent = serializeConfigToToml(validatedConfig);
 
-    // Preview the diff (Req 15.5, 15.6)
+    // Preview the diff 
     const diffOutput = generateAndRenderDiff(userConfigPath, oldContent, newContent);
     info(bold("Preview:"));
     info(diffOutput);
 
-    // If --dry-run, exit without writing (Req 15.6)
+    // If --dry-run, exit without writing
     if (options.dryRun) {
       info(yellow("Dry-run mode — no changes written."));
       return;
     }
 
-    // If not --yes, prompt for confirmation (Req 15.5)
+    // If not --yes, prompt for confirmation 
     if (!options.yes) {
       let confirmed: boolean;
       try {
@@ -2040,7 +2316,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
       }
     }
 
-    // Write to ~/.aria/config.toml (Req 15.4)
+    // Write to ~/.aria/config.toml 
     const ariaDir = path.join(os.homedir(), ".aria");
     if (!existsSync(ariaDir)) {
       mkdirSync(ariaDir, { recursive: true });
@@ -2051,7 +2327,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // config init: create ./.aria.toml with defaults (Req 15.8, 15.9)
+  // config init: create ./.aria.toml with defaults 
   // ---------------------------------------------------------------------------
   if (options.subcommand === "init") {
     // Generate default config content
@@ -2066,13 +2342,13 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
     info(bold("Preview (.aria.toml):"));
     info(diffOutput);
 
-    // If --dry-run, exit without writing (Req 17.4)
+    // If --dry-run, exit without writing 
     if (options.dryRun) {
       info(yellow("Dry-run mode — no file created."));
       return;
     }
 
-    // If not --yes, prompt for confirmation (Req 15.9)
+    // If not --yes, prompt for confirmation 
     if (!options.yes) {
       let confirmed: boolean;
       try {
@@ -2090,7 +2366,7 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
       }
     }
 
-    // Write ./.aria.toml (Req 15.8)
+    // Write ./.aria.toml
     writeFileSync(projectConfigPath, defaultContent, "utf-8");
     info(green(`✓ Created ${projectConfigPath}`));
     return;
@@ -2105,8 +2381,8 @@ export async function runConfig(options: ConfigOptions): Promise<void> {
  * Options parsed from CLI flags for the doctor command.
  */
 export interface DoctorOptions {
-  /** Output format: "text" (default) or "json" */
-  format?: "text" | "json";
+  /** Output format */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
   /** Project root (defaults to process.cwd()) */
   projectRoot?: string;
 }
@@ -2126,7 +2402,6 @@ export interface DiagnosticCheck {
  * Runs a series of environment diagnostic checks and reports results.
  * Exits with code 1 if any critical check fails.
  *
- * Requirements: 16.1–16.13
  */
 export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
@@ -2143,7 +2418,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   const checks: DiagnosticCheck[] = [];
 
   // -------------------------------------------------------------------------
-  // 1. Node.js version >= 20 (Req 16.2) — CRITICAL
+  // 1. Node.js version >= 20 
   // -------------------------------------------------------------------------
   {
     const nodeVersion = process.version; // e.g. "v20.11.0"
@@ -2160,7 +2435,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 2. git availability (Req 16.3) — WARN only
+  // 2. git availability — WARN only
   // -------------------------------------------------------------------------
   {
     try {
@@ -2172,7 +2447,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 3. ripgrep (rg) availability (Req 16.4) — WARN only
+  // 3. ripgrep (rg) availability — WARN only
   // -------------------------------------------------------------------------
   {
     try {
@@ -2184,7 +2459,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 4. Config file syntax and schema validation (Req 16.5) — CRITICAL
+  // 4. Config file syntax and schema validation — CRITICAL
   // -------------------------------------------------------------------------
   {
     const userConfigPath = path.join(os.homedir(), ".aria", "config.toml");
@@ -2211,7 +2486,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 5. History DB accessibility and schema version (Req 16.6) — CRITICAL
+  // 5. History DB accessibility and schema version — CRITICAL
   // -------------------------------------------------------------------------
   {
     try {
@@ -2229,7 +2504,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6. Provider readiness — API key presence (Req 16.7) — CRITICAL for default
+  // 6. Provider readiness — API key presence — CRITICAL for default
   // v0.2.2: report all configured providers, fail only if default key is missing
   // -------------------------------------------------------------------------
   {
@@ -2267,7 +2542,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 7. Project type detection (Req 16.8)
+  // 7. Project type detection 
   // -------------------------------------------------------------------------
   {
     try {
@@ -2286,7 +2561,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 8. Prisma schema existence and model count (Req 16.9 + v0.2.0)
+  // 8. Prisma schema existence and model count 
   // -------------------------------------------------------------------------
   {
     try {
@@ -2322,7 +2597,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 9. Ollama reachability if Ollama provider selected (Req 16.10) — WARN
+  // 9. Ollama reachability if Ollama provider selected — WARN
   // -------------------------------------------------------------------------
   {
     const provider = config?.provider.default ?? "anthropic";
@@ -2348,12 +2623,28 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
     (c) => c.status === "fail" && criticalNames.has(c.name)
   );
 
-  if (options.format === "json") {
-    // JSON output (Req 16.12)
-    const allPassed = !checks.some((c) => c.status === "fail");
+  const allPassed = !checks.some((c) => c.status === "fail");
+
+  if (options.format === 'json' || options.format === 'ndjson') {
+    // v0.2.3: structured output via formatOutput
+    const doctorChecks = checks.map((c) => ({
+      name: c.name,
+      passed: c.status !== 'fail',
+      message: c.message,
+    }));
     process.stdout.write(
-      JSON.stringify({ checks, allPassed }, null, 2) + "\n"
+      formatOutput(
+        { version: '1' as const, checks: doctorChecks, allPassed },
+        options.format,
+        DoctorOutputSchema,
+      ),
     );
+  } else if (options.format === 'plain') {
+    // Plain text — no ANSI codes, tab-separated
+    for (const check of checks) {
+      const icon = check.status === 'pass' ? 'OK' : check.status === 'warn' ? 'WARN' : 'FAIL';
+      process.stdout.write(`${icon}\t${check.name}\t${check.message}\n`);
+    }
   } else {
     // Text output (Req 16.11)
     info("");
@@ -2379,7 +2670,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
     }
   }
 
-  // Exit with code 1 if any critical check fails (Req 16.13)
+  // Exit with code 1 if any critical check fails
   if (hasCriticalFailure) {
     process.exit(1);
   }

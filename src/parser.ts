@@ -4,6 +4,7 @@
  */
 
 import pc from "picocolors";
+import type { SessionStatus } from "./storage.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,7 +21,7 @@ export interface ParsedArgs {
   assumeYes: boolean;
   session?: string;
   quiet: boolean;
-  format: "text" | "json";
+  format: "text" | "json" | "ndjson" | "plain";
   // v0.2.2: global provider/model overrides
   provider?: string;
   model?: string;
@@ -48,6 +49,13 @@ export interface ParsedArgs {
   upgradeSubcommand?: "deps" | "prisma";
   upgradeRisk?: "patch" | "minor" | "major" | "all";
   upgradeDev?: boolean;
+  // history flags (v0.2.3)
+  historySearch?: string;
+  historyCommand?: string;
+  historySince?: string;
+  historyStatus?: SessionStatus;
+  historyExport?: string;
+  historySplit?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +85,7 @@ ${pc.bold("GLOBAL OPTIONS:")}
   --yes                 Skip confirmation prompts
   --session <id>        Resume or reference a session
   --quiet               Suppress non-essential output
-  --format <text|json>  Output format (default: text)
+  --format <fmt>        Output format: text, json, ndjson, plain (default: text)
   --provider <name>     Override provider (anthropic, openai, ollama, openrouter)
   --model <name>        Override model for this invocation
   --help, -h            Show this help message
@@ -140,11 +148,17 @@ ${pc.bold("OPTIONS:")}
   history: `
 ${pc.bold("USAGE:")}
   aria history [options]
+  aria history search <query>
 
 ${pc.bold("OPTIONS:")}
   --limit <n>           Limit number of results
   --session <id>        Show full log for a specific session
   --tree                Render tool execution tree
+  --command <cmd>       Filter by command name
+  --since <expr>        Filter by date (e.g. "3 days ago", "2024-01-15")
+  --status <status>     Filter by status: running, completed, failed, cancelled
+  --export <path>       Export session transcript to markdown file (requires --session)
+  --format <fmt>        Output format: text, json, ndjson, plain (default: text)
 `,
   config: `
 ${pc.bold("USAGE:")}
@@ -210,7 +224,6 @@ ${pc.bold("OPTIONS (prisma):")}
 
 /**
  * Parse an argv array into a typed ParsedArgs object.
- * Requirements: 2.1, 2.2, 2.3, 2.4, 2.7, 2.8
  */
 export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
   const args: ParsedArgs = {
@@ -241,9 +254,9 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       args.session = token.slice("--session=".length);
     } else if (token === "--format") {
       i++;
-      args.format = tokens[i] as "text" | "json";
+      args.format = tokens[i] as "text" | "json" | "ndjson" | "plain";
     } else if (token.startsWith("--format=")) {
-      args.format = token.slice("--format=".length) as "text" | "json";
+      args.format = token.slice("--format=".length) as "text" | "json" | "ndjson" | "plain";
     } else if (token === "--max-tokens") {
       i++;
       args.maxTokens = parseInt(tokens[i], 10);
@@ -299,6 +312,28 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       args.upgradeRisk = token.slice("--risk=".length) as "patch" | "minor" | "major" | "all";
     } else if (token === "--dev") {
       args.upgradeDev = true;
+    } else if (token === "--command") {
+      i++;
+      args.historyCommand = tokens[i];
+    } else if (token.startsWith("--command=")) {
+      args.historyCommand = token.slice("--command=".length);
+    } else if (token === "--since") {
+      i++;
+      args.historySince = tokens[i];
+    } else if (token.startsWith("--since=")) {
+      args.historySince = token.slice("--since=".length);
+    } else if (token === "--status") {
+      i++;
+      args.historyStatus = tokens[i] as SessionStatus;
+    } else if (token.startsWith("--status=")) {
+      args.historyStatus = token.slice("--status=".length) as SessionStatus;
+    } else if (token === "--export") {
+      i++;
+      args.historyExport = tokens[i];
+    } else if (token.startsWith("--export=")) {
+      args.historyExport = token.slice("--export=".length);
+    } else if (token === "--split") {
+      args.historySplit = true;
     } else if (token === "--provider") {
       i++;
       args.provider = tokens[i];
@@ -363,6 +398,12 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
       }
       break;
     }
+    case "history": {
+      if (positionals[1] === "search" && positionals[2]) {
+        args.historySearch = positionals[2];
+      }
+      break;
+    }
   }
 
   return args;
@@ -375,7 +416,6 @@ export function parseCLI(argv: string[] = process.argv.slice(2)): ParsedArgs {
 /**
  * Validate parsed arguments.
  * Calls process.exit(2) on invalid arguments.
- * Requirements: 2.5, 2.6
  */
 export function validateArgs(args: ParsedArgs): void {
   const fail = (message: string, command?: string): never => {
@@ -385,8 +425,14 @@ export function validateArgs(args: ParsedArgs): void {
     process.exit(2);
   };
 
-  if (args.format !== "text" && args.format !== "json") {
-    fail(`--format must be "text" or "json", got "${args.format}"`);
+  const VALID_FORMATS = ['text', 'json', 'ndjson', 'plain'] as const;
+  if (!VALID_FORMATS.includes(args.format as (typeof VALID_FORMATS)[number])) {
+    fail(`--format must be one of: text, json, ndjson, plain. Got "${args.format}"`);
+  }
+
+  const VALID_STATUSES = ['running', 'completed', 'failed', 'cancelled'] as const;
+  if (args.historyStatus && !VALID_STATUSES.includes(args.historyStatus as (typeof VALID_STATUSES)[number])) {
+    fail(`--status must be one of: running, completed, failed, cancelled. Got "${args.historyStatus}"`);
   }
 
   if (

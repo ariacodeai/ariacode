@@ -21,7 +21,6 @@ export interface ProjectInfo {
 
 /**
  * Detect project type based on framework indicators
- * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9
  */
 export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo {
   const rootPath = resolve(rootDir);
@@ -45,7 +44,7 @@ export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo 
     ...packageJson?.devDependencies,
   };
 
-  // Detect Next.js (Requirement 4.1)
+  // Detect Next.js 
   const hasNextDep = !!deps?.next;
   const hasNextConfig = 
     existsSync(join(rootPath, 'next.config.js')) ||
@@ -58,7 +57,7 @@ export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo 
   const packageManager = detectPackageManager(rootPath);
 
   if (hasNextDep || hasNextConfig) {
-    // Detect Next.js router type (Requirements 4.2, 4.3)
+    // Detect Next.js router type 
     const router = detectNextJsRouter(rootPath);
 
     return {
@@ -76,7 +75,7 @@ export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo 
     };
   }
 
-  // Detect Nest.js (Requirement 4.4)
+  // Detect Nest.js 
   const hasNestDep = !!deps?.['@nestjs/core'];
   const hasNestCli = existsSync(join(rootPath, 'nest-cli.json'));
 
@@ -95,7 +94,7 @@ export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo 
     };
   }
 
-  // Fallback to Node.js (Requirement 4.5)
+  // Fallback to Node.js 
   return {
     type: "nodejs",
     hasPrisma: prisma.hasPrisma,
@@ -108,13 +107,12 @@ export function detectProjectType(rootDir: string = process.cwd()): ProjectInfo 
 
 /**
  * Detect Next.js router type (app vs pages)
- * Requirements: 4.2, 4.3
  */
 function detectNextJsRouter(rootPath: string): "app" | "pages" | undefined {
   const appDir = join(rootPath, 'app');
   const pagesDir = join(rootPath, 'pages');
 
-  // Check for app router indicators (Requirement 4.2)
+  // Check for app router indicators 
   if (existsSync(appDir)) {
     try {
       const appContents = readdirSync(appDir);
@@ -129,7 +127,7 @@ function detectNextJsRouter(rootPath: string): "app" | "pages" | undefined {
     }
   }
 
-  // Check for pages router indicators (Requirement 4.3)
+  // Check for pages router indicators 
   if (existsSync(pagesDir)) {
     try {
       const pagesContents = readdirSync(pagesDir);
@@ -154,7 +152,6 @@ function detectNextJsRouter(rootPath: string): "app" | "pages" | undefined {
 
 /**
  * Detect Prisma presence and schema path
- * Requirement: 4.6
  */
 function detectPrisma(rootPath: string, deps: Record<string, any>): {
   hasPrisma: boolean;

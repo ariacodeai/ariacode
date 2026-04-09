@@ -300,3 +300,60 @@ describe("parseCLI — upgrade subcommand", () => {
     expect(args.dbModel).toBe("User");
   });
 });
+
+// v0.2.3: history subcommand and new format values
+describe("parseCLI — history flags (v0.2.3)", () => {
+  it("parses --format ndjson", () => {
+    const args = parseCLI(["history", "--format", "ndjson"]);
+    expect(args.format).toBe("ndjson");
+  });
+
+  it("parses --format plain", () => {
+    const args = parseCLI(["history", "--format", "plain"]);
+    expect(args.format).toBe("plain");
+  });
+
+  it("parses history search subcommand", () => {
+    const args = parseCLI(["history", "search", "my query"]);
+    expect(args.command).toBe("history");
+    expect(args.historySearch).toBe("my query");
+  });
+
+  it("parses --command filter for history", () => {
+    const args = parseCLI(["history", "--command", "patch", "--status", "completed"]);
+    expect(args.historyCommand).toBe("patch");
+    expect(args.historyStatus).toBe("completed");
+  });
+
+  it("parses --split flag for patch", () => {
+    const args = parseCLI(["patch", "--split"]);
+    expect(args.historySplit).toBe(true);
+  });
+});
+
+describe("validateArgs — v0.2.3 format and status validation", () => {
+  it("rejects --format cobol with exit code 2", () => {
+    const args = parseCLI(["history", "--format", "cobol"]);
+    expect(() => validateArgs(args)).toThrow("process.exit(2)");
+  });
+
+  it("rejects --status invalid with exit code 2", () => {
+    const args = parseCLI(["history", "--status", "invalid"]);
+    expect(() => validateArgs(args)).toThrow("process.exit(2)");
+  });
+
+  it("accepts --format ndjson as valid", () => {
+    const args = parseCLI(["history", "--format", "ndjson"]);
+    expect(() => validateArgs(args)).not.toThrow();
+  });
+
+  it("accepts --format plain as valid", () => {
+    const args = parseCLI(["history", "--format", "plain"]);
+    expect(() => validateArgs(args)).not.toThrow();
+  });
+
+  it("accepts --status completed as valid", () => {
+    const args = parseCLI(["history", "--status", "completed"]);
+    expect(() => validateArgs(args)).not.toThrow();
+  });
+});

@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-04-09
+
+UX Polish — in-house syntax highlighter, enhanced diff renderer, history search/filter/export, and structured `--format json/ndjson/plain` output across all data-producing commands.
+
+### Added
+
+**Diff Renderer (`src/ui/diff-renderer.ts`)**
+- `renderDiff(diffText, options: DiffRenderOptions): string` — enhanced diff renderer with syntax highlighting, line numbers, collapsible unchanged sections, and optional side-by-side layout
+- `DiffRenderOptions` interface: `split`, `lineNumbers`, `collapseThreshold`, `language?`, `terminalWidth?`
+- Unchanged context runs exceeding `collapseThreshold` are collapsed to `... N unchanged lines ...`
+- File header line above each file's diff showing path and `+M -N lines` mutation summary
+- Side-by-side rendering when `--split` is passed and terminal width > 120 columns; falls back to unified silently otherwise
+
+**In-House Syntax Highlighter (`src/ui/highlight.ts`)**
+- `highlight(code, options): string` — zero-dependency syntax highlighter using `picocolors` (already a project dependency)
+- `inferLanguageFromPath(filePath): SupportedLanguage | null` — maps file extensions to language identifiers
+- Supported languages: TypeScript/JavaScript (keywords, strings, comments, numbers, type annotations), Prisma (model/enum/directive keywords), JSON (keys, values, booleans, null), Markdown (headings, bold/italic, inline code, fenced blocks)
+- Returns input unchanged for unsupported languages — never throws
+
+**History Queries (`src/storage/queries.ts`)**
+- `searchSessions(db, query, options?)` — case-insensitive full-text search across session `command`, `project_root`, and message `content`; results ordered by relevance (message matches ranked above metadata matches)
+- `filterSessions(db, filters)` — filter sessions by `command`, `since`, `status`, and `limit` with AND logic
+- `exportSessionMarkdown(db, sessionId, outputPath)` — write a markdown transcript with session metadata table, chronological message transcript, and tool execution table; creates parent directories automatically
+- `parseSinceExpression(expr): Date` — parses `"N days/hours/minutes ago"` and ISO 8601 date strings; throws with descriptive message for unrecognized formats
+
+**History Command Enhancements**
+- `aria history search "<query>"` — full-text search subcommand with relevance-ranked results
+- `aria history --command <cmd>` — filter by command name
+- `aria history --since "<expr>"` — filter by date (natural language or ISO 8601)
+- `aria history --status <status>` — filter by session status (`running`, `completed`, `failed`, `cancelled`)
+- `aria history --session <id> --export <path>` — export session as markdown file
+- `--tree` now shows tool-type icons: `[R]` read, `[S]` search, `[W]` mutation, `[.]` other; `✓` green for success, `✗` red for error
+
+**Structured Output (`src/output/schemas.ts`)**
+- `OutputVersion = '1'` — versioned output type for downstream stability
+- Zod schemas for all 11 commands: `AskOutputSchema`, `PlanOutputSchema`, `PatchOutputSchema`, `ReviewOutputSchema`, `ExploreOutputSchema`, `DbSchemaOutputSchema`, `DbAskOutputSchema`, `DbExplainOutputSchema`, `HistoryOutputSchema`, `DoctorOutputSchema`, `UpgradeDepsOutputSchema`
+- `formatOutput<T>(data, format, schema): string` — validates data against schema before serializing; throws `OutputValidationError` on validation failure
+- `OutputValidationError` class with `issues: ZodIssue[]` field
+
+**`--format` Flag Expansion**
+- All data-producing commands now accept `--format json`, `--format ndjson`, and `--format plain`
+- `json` — single validated JSON object to stdout, all spinner/info output suppressed
+- `ndjson` — one JSON object per line; final `{"version":"1","event":"done"}` line on success; `{"version":"1","event":"error","error":"..."}` to stderr on failure
+- `plain` — tab-separated output with no ANSI codes and no `cli-table3` box-drawing characters
+- Structured error output: `--format json` failures write `{"version":"1","error":"...","exitCode":N}` to stderr; stdout remains empty
+
+**`aria patch` Enhancements**
+- `--split` flag — enable side-by-side diff rendering (requires terminal width > 120)
+- `--format plain` — disables line numbers and ANSI codes in diff output; requires `--yes` (exits with code 2 otherwise)
+- Default diff rendering now uses `renderDiff` from `src/ui/diff-renderer.ts` with `lineNumbers: true` and `collapseThreshold: 5`
+
+### Changed
+
+- Bumped version to `0.2.3`
+- `--format` type widened from `'text' | 'json'` to `'text' | 'json' | 'ndjson' | 'plain'`
+- `validateArgs` rejects any `--format` value not in `['text', 'json', 'ndjson', 'plain']` with exit code 2
+- `validateArgs` rejects any `--status` value not in `['running', 'completed', 'failed', 'cancelled']` with exit code 2
+- `aria patch` diff preview uses the new enhanced renderer by default (line numbers on, collapse threshold 5)
+
 ## [0.2.2] - 2026-04-07
 
 Provider Expansion — global `--provider` and `--model` flags, per-provider config overrides, and full provider support across all commands including `db` and `upgrade`.

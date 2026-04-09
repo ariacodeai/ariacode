@@ -1,0 +1,89 @@
+// Prisma sample fixture for syntax highlighting tests
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  USER
+  GUEST
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile  Profile?
+  orders   Order[]
+  sessions Session[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model Profile {
+  id     Int     @id @default(autoincrement())
+  bio    String?
+  avatar String?
+  userId Int     @unique
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Order {
+  id          Int         @id @default(autoincrement())
+  total       Float
+  status      OrderStatus @default(PENDING)
+  createdAt   DateTime    @default(now())
+  completedAt DateTime?
+  userId      Int
+
+  user  User        @relation(fields: [userId], references: [id])
+  items OrderItem[]
+
+  @@index([userId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id       Int    @id @default(autoincrement())
+  quantity Int
+  price    Float
+  orderId  Int
+  sku      String
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  expiresAt DateTime
+  userId    Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}

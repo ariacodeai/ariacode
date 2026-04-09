@@ -14,7 +14,7 @@ import { parsePrismaSchema } from '../db/schema.js';
 import { renderSchemaSummary } from '../db/summary.js';
 import { detectProjectType } from '../repo.js';
 import { createProvider } from '../provider.js';
-import { initializeDatabase, createSession, updateSessionStatus, logMessage } from '../storage.js';
+import { initializeDatabase, createSession, updateSessionStatus, logMessage, getSession } from '../storage.js';
 import {
   readFileTool,
   searchCodeTool,
@@ -23,8 +23,9 @@ import {
   findModelReferencesTool,
 } from '../tools.js';
 import { agentLoop, UserCancelledError } from '../agent.js';
-import { initUI, info, error as uiError, yellow } from '../ui.js';
+import { initUI, info, error as uiError, yellow, stripAnsi } from '../ui.js';
 import { ConfirmCancelledError } from '../ui.js';
+import { formatOutput, DbAskOutputSchema } from '../output/schemas.js';
 import type { ExecutionContext } from '../context.js';
 import type { Tool } from '../tools.js';
 
@@ -50,12 +51,14 @@ export interface DbAskOptions {
   provider?: string;
   /** Override LLM model (v0.2.2) */
   model?: string;
+  /** Output format (v0.2.3) */
+  format?: 'text' | 'json' | 'ndjson' | 'plain';
 }
 
 export async function runDbAsk(options: DbAskOptions): Promise<void> {
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
   const config = getConfig(projectRoot, { quiet: options.quiet, provider: options.provider, model: options.model });
-  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet));
+  initUI(config.ui.color, config.ui.quiet || Boolean(options.quiet) || (options.format === 'json' || options.format === 'ndjson'));
 
   // Validate schema exists
   const schemaInfo = parsePrismaSchema(projectRoot);
@@ -69,8 +72,6 @@ export async function runDbAsk(options: DbAskOptions): Promise<void> {
 
   let sessionId: string;
   if (options.session) {
-    // Validate session exists before resuming
-    const { getSession } = await import('../storage.js');
     const existing = getSession(db, options.session);
     if (!existing) {
       uiError(`Session not found: ${options.session}`);
@@ -131,7 +132,21 @@ export async function runDbAsk(options: DbAskOptions): Promise<void> {
   }
 
   try {
-    await agentLoop(ctx, userRequest, DB_ASK_TOOLS, provider, config, 'db ask', db, systemPrompt);
+    const answer = await agentLoop(ctx, userRequest, DB_ASK_TOOLS, provider, config, 'db ask', db, systemPrompt);
+
+    // v0.2.3: structured output 
+    if (options.format === 'json' || options.format === 'ndjson') {
+      process.stdout.write(
+        formatOutput(
+          { version: '1' as const, answer, sessionId },
+          options.format,
+          DbAskOutputSchema,
+        ),
+      );
+    } else if (options.format === 'plain') {
+      process.stdout.write(stripAnsi(answer) + '\n');
+    }
+
     updateSessionStatus(db, sessionId, 'completed');
   } catch (err) {
     if (err instanceof UserCancelledError || err instanceof ConfirmCancelledError) {
@@ -140,6 +155,18 @@ export async function runDbAsk(options: DbAskOptions): Promise<void> {
       process.exit(130);
     }
     const message = err instanceof Error ? err.message : String(err);
+
+    // v0.2.3: structured error output 
+    if (options.format === 'json') {
+      process.stderr.write(JSON.stringify({ version: '1', error: message, exitCode: 1 }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    } else if (options.format === 'ndjson') {
+      process.stderr.write(JSON.stringify({ version: '1', event: 'error', error: message }) + '\n');
+      updateSessionStatus(db, sessionId, 'failed', message);
+      process.exit(1);
+    }
+
     uiError(message);
     updateSessionStatus(db, sessionId, 'failed', message);
     process.exit(1);

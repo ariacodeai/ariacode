@@ -22,6 +22,21 @@ const MAX_PROPOSED_DIFFS = 100;
 const PROPOSED_DIFF_TTL_MS = 30 * 60 * 1000;
 
 /**
+ * Active diff renderer function set by runPatch.
+ * When set, proposeDiffTool will use this function to display diffs.
+ */
+let _activeDiffRenderer: ((diffText: string) => string) | null = null;
+
+/**
+ * Set the active diff renderer for the current patch invocation.
+ * Called by runPatch before the agent loop to configure enhanced rendering.
+ * Pass null to clear (called in finally block after patch completes).
+ */
+export function setDiffRenderOptions(renderer: ((diffText: string) => string) | null): void {
+  _activeDiffRenderer = renderer;
+}
+
+/**
  * Tool result interface
  * All tools must return this structure
  */
@@ -88,7 +103,6 @@ function evictStaleDiffs(): void {
 /**
  * read_file tool
  * Reads file content by path with safety validation
- * Requirements: 8.1, 8.7, 8.8
  */
 export const readFileTool: Tool = {
   name: "read_file",
@@ -226,7 +240,6 @@ function listDirectoryRecursive(
 /**
  * list_directory tool
  * Lists directory contents with optional recursion
- * Requirements: 8.2, 8.6, 23.2, 23.3
  */
 export const listDirectoryTool: Tool = {
   name: "list_directory",
@@ -311,7 +324,6 @@ export const listDirectoryTool: Tool = {
 /**
  * search_code tool
  * Searches code using ripgrep with gitignore support
- * Requirements: 8.3, 22.3
  */
 export const searchCodeTool: Tool = {
   name: "search_code",
@@ -435,7 +447,6 @@ export const searchCodeTool: Tool = {
 /**
  * read_package_json tool
  * Reads and parses package.json from project root
- * Requirements: 8.4
  */
 export const readPackageJsonTool: Tool = {
   name: "read_package_json",
@@ -475,7 +486,6 @@ export const readPackageJsonTool: Tool = {
 /**
  * read_prisma_schema tool
  * Reads prisma/schema.prisma if Prisma is detected
- * Requirements: 8.5
  */
 export const readPrismaSchemaTool: Tool = {
   name: "read_prisma_schema",
@@ -589,7 +599,6 @@ function generateRollbackHints(files: Array<{ path: string; oldContent: string; 
 /**
  * propose_diff tool
  * Generates a unified diff without applying changes
- * Requirements: 11.4, 11.5
  */
 export const proposeDiffTool: Tool = {
   name: "propose_diff",
@@ -667,6 +676,14 @@ export const proposeDiffTool: Tool = {
       // Store the diff for later application
       proposedDiffs.set(diffId, { files, summary, createdAt: Date.now() });
 
+      // Render and display diffs using the enhanced renderer if options are set
+      if (_activeDiffRenderer !== null) {
+        for (const { diff } of diffs) {
+          const rendered = _activeDiffRenderer(diff);
+          process.stdout.write(rendered + '\n');
+        }
+      }
+
       return {
         success: true,
         data: {
@@ -687,7 +704,6 @@ export const proposeDiffTool: Tool = {
 /**
  * apply_diff tool
  * Applies a previously proposed diff atomically
- * Requirements: 11.10, 11.11, 11.12, 11.13
  */
 export const applyDiffTool: Tool = {
   name: "apply_diff",
